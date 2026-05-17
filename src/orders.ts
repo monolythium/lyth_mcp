@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 
 const STORE_VERSION = 1;
 
-export type OrderStatus = "created" | "payment_prepared" | "paid" | "fulfilled_demo" | "fulfilled_manual" | "cancelled";
+export type OrderStatus = "created" | "payment_prepared" | "paid" | "fulfillment_requested" | "fulfilled_demo" | "fulfilled_manual" | "cancelled";
 
 export interface OrderEvent {
   at: string;
@@ -38,10 +38,14 @@ export interface OrderRecord {
     preparedAt?: string;
   };
   fulfillment?: {
-    adapter: "dry_run" | "manual";
+    adapter: "dry_run" | "manual" | "webhook";
     confirmation: string;
-    fulfilledAt: string;
+    fulfilledAt?: string;
+    requestedAt?: string;
     note?: string;
+    connectorId?: string;
+    responseStatus?: number;
+    responseHash?: string;
   };
   cancelReason?: string;
   events: OrderEvent[];

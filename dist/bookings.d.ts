@@ -1,4 +1,4 @@
-export type BookingStatus = "requested" | "accepted_demo" | "escrow_prepared" | "paid" | "completed_demo" | "cancelled" | "disputed_demo";
+export type BookingStatus = "requested" | "provider_requested" | "accepted_demo" | "escrow_prepared" | "paid" | "completed_demo" | "cancelled" | "disputed_demo";
 export interface BookingEvent {
     at: string;
     type: string;

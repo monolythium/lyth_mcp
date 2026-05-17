@@ -153,6 +153,8 @@ examples/claude_desktop_config.json
 | `LYTH_MCP_ADDRESSBOOK` | `~/.lyth_mcp/addressbook.json` | Local contact/addressbook store path |
 | `LYTH_MCP_OUTBOX` | `~/.lyth_mcp/outbox.json` | Local signed-payload outbox for retrying without rebuilding/re-signing |
 | `LYTH_MCP_RECEIPTS` | `~/.lyth_mcp/receipts.json` | Local receipt store for drafted/signed/submitted/failed operations |
+| `LYTH_MCP_CONNECTOR_STORE` | `~/.lyth_mcp/connectors.json` | Local webhook connector store |
+| `LYTH_MCP_CONNECTOR_KEY` | `~/.lyth_mcp/connector.key` | Local key used to encrypt connector API keys/webhook secrets |
 | `LYTH_MCP_ORDER_STORE` | `~/.lyth_mcp/orders.json` | Local demo order lifecycle store |
 | `LYTH_MCP_BOOKING_STORE` | `~/.lyth_mcp/bookings.json` | Local service-booking lifecycle store |
 | `LYTH_MCP_INVOICE_STORE` | `~/.lyth_mcp/invoices.json` | Local invoice and funding-request store |
@@ -203,6 +205,11 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `vendor_search` | Search a local vendor registry JSON |
 | `vendor_registry_info` | Show registry hashes, issuer, expiry, signature status, and categories |
 | `vendor_get` | Get one vendor by id |
+| `connector_set` | Create or update an encrypted local webhook connector |
+| `connector_get` | Get one connector without revealing its secret |
+| `connector_list` | List local connectors without revealing secrets |
+| `connector_remove` | Remove one connector and its encrypted secret |
+| `connector_test_webhook` | Preview or send a test webhook payload |
 | `merchant_policy_set` | Create or update local merchant risk controls |
 | `merchant_policy_get` | Get one vendor's local merchant policy and risk view |
 | `merchant_policy_list` | List local merchant policies |
@@ -218,8 +225,10 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `order_cancel` | Cancel a local order before dry-run fulfillment |
 | `order_fulfill_dry_run` | Mark a local demo order fulfilled without contacting a real vendor |
 | `order_fulfill_manual` | Mark a local order fulfilled from manual vendor evidence |
+| `order_fulfill_webhook` | Send an order to a configured vendor webhook connector |
 | `booking_request_create` | Create a local service-booking request and `book_service` runbook draft |
 | `booking_accept_demo` | Mark a booking accepted by a demo provider |
+| `booking_send_webhook` | Send a booking request to a configured vendor webhook connector |
 | `booking_prepare_escrow` | Prepare an `open_escrow` runbook draft for a booking |
 | `booking_mark_paid` | Mark a booking paid with an observed tx hash |
 | `booking_complete_dry_run` | Mark a booking completed by dry-run fulfillment |
@@ -399,7 +408,7 @@ Signed payloads are now also written to the local outbox. Prefer retrying with `
 }
 ```
 
-Use `mcp_dashboard` when you want a Claude Code-friendly Markdown view of wallets, outbox entries, receipts, orders, bookings, invoices, and merchant policies.
+Use `mcp_dashboard` when you want a Claude Code-friendly Markdown view of wallets, outbox entries, receipts, connectors, orders, bookings, invoices, and merchant policies.
 
 Before signing a payment, the MCP now runs transfer preflight checks. You can call the same checks directly:
 
@@ -600,10 +609,29 @@ Typical flow:
 2. `order_create`
 3. `order_pay`
 4. `order_mark_paid` with an observed tx hash, or continue as payment-prepared in a dry run
-5. `order_fulfill_dry_run` for a demo, or `order_fulfill_manual` with a vendor confirmation/reference
+5. `order_fulfill_dry_run` for a demo, `order_fulfill_webhook` for a configured vendor connector, or `order_fulfill_manual` with a vendor confirmation/reference
 6. `order_receipt`
 
 Quotes and order creation include a local merchant-risk evaluation. If a vendor is denylisted, exceeds a configured cap, uses a blocked asset, or falls outside an allowed category, `order_create` and `order_pay` refuse the flow.
+
+## Fulfillment Connectors
+
+Connectors are local webhook/API-key records for vendor integrations. Secrets are encrypted at rest with `LYTH_MCP_CONNECTOR_KEY` and never returned by list/get tools.
+
+Example:
+
+```json
+{
+  "id": "pizza-demo-webhook",
+  "vendorId": "pizza-demo",
+  "endpoint": "https://vendor.example/orders",
+  "authMode": "hmac_sha256",
+  "secret": "vendor-shared-secret",
+  "confirm": "STORE_CONNECTOR"
+}
+```
+
+Use `connector_test_webhook` without `send=true` to preview the payload hash and endpoint before sending. `order_fulfill_webhook` and `booking_send_webhook` require explicit confirmation and record receipts/events. A successful webhook means the external service accepted the request; it is not final proof that goods or services were delivered.
 
 ## Merchant Risk Controls
 
@@ -632,7 +660,7 @@ Bookings model the service side of agent commerce: a plumber request, travel req
 Typical flow:
 
 1. `booking_request_create`
-2. `booking_accept_demo`
+2. `booking_send_webhook` for a configured provider, or `booking_accept_demo` for local demos
 3. `booking_prepare_escrow` when the service needs deliverable-based payment
 4. `booking_mark_paid` with an observed payment or escrow tx hash
 5. `booking_complete_dry_run`, `booking_dispute_demo`, or `booking_cancel`

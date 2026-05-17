@@ -7,6 +7,7 @@ const STORE_VERSION = 1;
 
 export type BookingStatus =
   | "requested"
+  | "provider_requested"
   | "accepted_demo"
   | "escrow_prepared"
   | "paid"

@@ -11,6 +11,8 @@
         "LYTH_MCP_HOT_KEY": "/absolute/path/to/.lyth_mcp/hot.key",
         "LYTH_MCP_LOCAL_KEY": "/absolute/path/to/.lyth_mcp/local.key",
         "LYTH_MCP_ADDRESSBOOK": "/absolute/path/to/.lyth_mcp/addressbook.json",
+        "LYTH_MCP_CONNECTOR_STORE": "/absolute/path/to/.lyth_mcp/connectors.json",
+        "LYTH_MCP_CONNECTOR_KEY": "/absolute/path/to/.lyth_mcp/connector.key",
         "LYTH_MCP_ORDER_STORE": "/absolute/path/to/.lyth_mcp/orders.json",
         "LYTH_MCP_BOOKING_STORE": "/absolute/path/to/.lyth_mcp/bookings.json",
         "LYTH_MCP_INVOICE_STORE": "/absolute/path/to/.lyth_mcp/invoices.json",

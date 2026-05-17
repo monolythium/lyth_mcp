@@ -18,6 +18,7 @@ import { z } from "zod";
 import { addressbookInfo, listAddressbookContacts, removeAddressbookContact, resolveAddressbookContact, upsertAddressbookContact, } from "./addressbook.js";
 import { addOutboxEntry, forgetOutboxEntry, getOutboxEntry, listOutboxEntries, outboxInfo, recordOutboxAttempt, updateOutboxStatus, } from "./outbox.js";
 import { addReceipt, getReceipt, listReceipts, receiptInfo, } from "./receipts.js";
+import { buildConnectorHeaders, connectorPayloadHash, connectorStoreInfo, getConnector, listConnectors, redactConnector, removeConnector, resolveConnector, upsertConnector, } from "./connectors.js";
 import { createOrder, getOrder, listOrders, orderStoreInfo, updateOrder, } from "./orders.js";
 import { bookingStoreInfo, createBooking, getBooking, listBookings, updateBooking, } from "./bookings.js";
 import { createInvoice, getInvoice, invoiceStoreInfo, listInvoices, updateInvoice, } from "./invoices.js";
@@ -211,6 +212,50 @@ async function apiGet(endpoint, path, query = {}) {
         }
         return body;
     });
+}
+async function sendConnectorJson(connector, payload) {
+    if (!connector.enabled) {
+        throw new Error(`connector '${connector.id}' is disabled`);
+    }
+    const body = safeStringify(payload);
+    const headers = await buildConnectorHeaders(connector, body);
+    return withTimeout(async (signal) => {
+        const res = await fetch(connector.endpoint, {
+            method: connector.method,
+            headers,
+            body,
+            signal,
+        });
+        const responseText = await res.text();
+        let responseBody = responseText;
+        try {
+            responseBody = responseText ? JSON.parse(responseText) : null;
+        }
+        catch {
+            responseBody = responseText;
+        }
+        return {
+            ok: res.ok,
+            status: res.status,
+            statusText: res.statusText,
+            endpoint: connector.endpoint,
+            method: connector.method,
+            payloadHash: connectorPayloadHash(body),
+            responseHash: connectorPayloadHash(responseText),
+            responseBody,
+        };
+    });
+}
+function connectorResponseReference(responseBody, fallback) {
+    if (responseBody && typeof responseBody === "object") {
+        const body = responseBody;
+        for (const key of ["confirmation", "reference", "receiptId", "orderId", "bookingId", "id"]) {
+            if (typeof body[key] === "string" && body[key]) {
+                return body[key];
+            }
+        }
+    }
+    return fallback;
 }
 async function probeEndpoint(endpoint) {
     const started = Date.now();
@@ -1052,8 +1097,8 @@ const runbookEnum = z.enum([
 ]);
 const outboxStatusEnum = z.enum(["signed", "submitted", "confirmed", "failed", "expired"]);
 const receiptStatusEnum = z.enum(["drafted", "signed", "submitted", "confirmed", "failed"]);
-const orderStatusEnum = z.enum(["created", "payment_prepared", "paid", "fulfilled_demo", "fulfilled_manual", "cancelled"]);
-const bookingStatusEnum = z.enum(["requested", "accepted_demo", "escrow_prepared", "paid", "completed_demo", "cancelled", "disputed_demo"]);
+const orderStatusEnum = z.enum(["created", "payment_prepared", "paid", "fulfillment_requested", "fulfilled_demo", "fulfilled_manual", "cancelled"]);
+const bookingStatusEnum = z.enum(["requested", "provider_requested", "accepted_demo", "escrow_prepared", "paid", "completed_demo", "cancelled", "disputed_demo"]);
 const invoiceStatusEnum = z.enum(["open", "paid", "cancelled", "expired"]);
 const recordSchema = z.record(z.unknown()).optional();
 const policySchema = z.object({
@@ -1119,6 +1164,7 @@ server.tool("mcp_self_check", "Check MCP install, config, stores, and RPC reacha
             addressbook: await addressbookInfo(),
             outbox: await outboxInfo(),
             receipts: await receiptInfo(),
+            connectors: await connectorStoreInfo(),
             orders: await orderStoreInfo(),
             bookings: await bookingStoreInfo(),
             invoices: await invoiceStoreInfo(),
@@ -2434,6 +2480,7 @@ server.tool("mcp_dashboard", "Render a compact Markdown dashboard for Claude Cod
     const wallets = await listWallets();
     const outbox = await listOutboxEntries({ limit: 10 });
     const receipts = await listReceipts({ limit: 10 });
+    const connectors = await listConnectors({ limit: 10 });
     const orders = await listOrders({ limit: 10 });
     const bookings = await listBookings({ limit: 10 });
     const invoices = await listInvoices({ limit: 10 });
@@ -2443,6 +2490,7 @@ server.tool("mcp_dashboard", "Render a compact Markdown dashboard for Claude Cod
     const contactInfo = await addressbookInfo();
     const outboxStore = await outboxInfo();
     const receiptStore = await receiptInfo();
+    const connectorStore = await connectorStoreInfo();
     const orderStore = await orderStoreInfo();
     const bookingStore = await bookingStoreInfo();
     const invoiceStore = await invoiceStoreInfo();
@@ -2458,6 +2506,7 @@ server.tool("mcp_dashboard", "Render a compact Markdown dashboard for Claude Cod
             ["Contacts", String(contacts.length), contactInfo.path],
             ["Outbox", String(outboxStore.entryCount), outboxStore.path],
             ["Receipts", String(receiptStore.receiptCount), receiptStore.path],
+            ["Connectors", String(connectorStore.connectorCount), connectorStore.path],
             ["Orders", String(orderStore.orderCount), orderStore.path],
             ["Bookings", String(bookingStore.bookingCount), bookingStore.path],
             ["Invoices", String(invoiceStore.invoiceCount), invoiceStore.path],
@@ -2508,7 +2557,15 @@ server.tool("mcp_dashboard", "Render a compact Markdown dashboard for Claude Cod
                 order.itemName ?? order.itemId ?? "",
                 `${order.amount} ${order.asset}`,
             ]))
-            : "No orders.", "", "## Bookings", bookings.length
+            : "No orders.", "", "## Connectors", connectors.length
+            ? mdTable(["ID", "Vendor", "Enabled", "Auth", "Endpoint"], connectors.map((connector) => [
+                connector.id,
+                connector.vendorId ?? "",
+                connector.enabled ? "yes" : "no",
+                connector.auth.mode,
+                connector.endpoint,
+            ]))
+            : "No connectors.", "", "## Bookings", bookings.length
             ? mdTable(["ID", "Status", "Vendor", "Service", "Amount"], bookings.map((booking) => [
                 booking.id,
                 booking.status,
@@ -2566,6 +2623,92 @@ server.tool("vendor_get", "Get one vendor by id from the configured registry.", 
             ? "This vendor uses demo fulfillment. No real goods or services are delivered."
             : undefined,
     });
+});
+server.tool("connector_set", "Create or update a local encrypted webhook connector for a vendor.", {
+    id: z.string().min(1).optional().describe("Connector id. Defaults to vendorId, or a generated id from endpoint."),
+    vendorId: z.string().min(1).optional(),
+    displayName: z.string().optional(),
+    endpoint: z.string().url(),
+    method: z.enum(["POST", "PUT"]).optional(),
+    enabled: z.boolean().optional(),
+    authMode: z.enum(["none", "bearer", "header", "hmac_sha256"]).optional(),
+    headerName: z.string().optional().describe("Header for header or hmac_sha256 auth."),
+    scheme: z.string().optional().describe("Authorization scheme for bearer auth. Default Bearer."),
+    secret: z.string().optional().describe("API key/webhook secret. Stored encrypted locally and never returned."),
+    confirm: z.literal("STORE_CONNECTOR"),
+}, async ({ confirm: _confirm, ...args }) => {
+    if (args.vendorId) {
+        const registry = await loadVendors();
+        getVendor(registry.registry, args.vendorId);
+    }
+    const connector = await upsertConnector(args);
+    return text({
+        connector: redactConnector(connector),
+        store: await connectorStoreInfo(),
+        warning: "Connector secrets are encrypted with a local machine key. Only store credentials for vendors you trust on this machine.",
+    });
+});
+server.tool("connector_get", "Get a local connector without revealing its secret.", {
+    id: z.string().min(1),
+}, async ({ id }) => text({ connector: redactConnector(await getConnector(id)) }));
+server.tool("connector_list", "List local webhook connectors without revealing secrets.", {
+    vendorId: z.string().optional(),
+    enabledOnly: z.boolean().optional(),
+    limit: z.number().min(1).max(200).optional(),
+}, async ({ vendorId, enabledOnly, limit }) => text({
+    store: await connectorStoreInfo(),
+    connectors: await listConnectors({ vendorId, enabledOnly, limit }),
+}));
+server.tool("connector_remove", "Remove a local webhook connector and its encrypted secret.", {
+    id: z.string().min(1),
+    confirm: z.literal("REMOVE_CONNECTOR"),
+}, async ({ id }) => text(await removeConnector(id)));
+server.tool("connector_test_webhook", "Preview or send a test JSON payload through a local webhook connector.", {
+    connectorId: z.string().min(1),
+    send: z.boolean().optional().describe("Default false. When false, returns a redacted request preview only."),
+    confirm: z.literal("SEND_TEST_WEBHOOK").optional(),
+}, async ({ connectorId, send, confirm }) => {
+    const connector = await getConnector(connectorId);
+    const payload = {
+        schemaVersion: 1,
+        type: "connector_test",
+        network: NETWORK,
+        chainId: CHAIN_ID,
+        connectorId,
+        createdAt: new Date().toISOString(),
+    };
+    if (!send) {
+        const body = safeStringify(payload);
+        return text({
+            connector: redactConnector(connector),
+            request: {
+                method: connector.method,
+                endpoint: connector.endpoint,
+                payload,
+                payloadHash: connectorPayloadHash(body),
+            },
+            warning: "Preview only. Set send=true and confirm=SEND_TEST_WEBHOOK to call the external endpoint.",
+        });
+    }
+    if (confirm !== "SEND_TEST_WEBHOOK") {
+        return errorText("confirm must be SEND_TEST_WEBHOOK when send=true");
+    }
+    const response = await sendConnectorJson(connector, payload);
+    const receipt = await addReceipt({
+        kind: "connector_test_webhook",
+        status: response.ok ? "confirmed" : "failed",
+        network: NETWORK,
+        chainId: CHAIN_ID,
+        title: `Tested connector ${connector.id}`,
+        summary: `${connector.method} ${connector.endpoint} -> HTTP ${response.status}`,
+        result: {
+            connector: redactConnector(connector),
+            response,
+        },
+    });
+    return response.ok
+        ? text({ connector: redactConnector(connector), response, receipt })
+        : errorJson({ connector: redactConnector(connector), response, receipt });
 });
 server.tool("merchant_policy_set", "Create or update local merchant risk controls for a vendor.", {
     vendorId: z.string().min(1),
@@ -2940,6 +3083,129 @@ server.tool("order_fulfill_manual", "Mark a local order fulfilled after manual v
         warning: "Manual fulfillment records evidence supplied to the MCP. It does not prove vendor-side delivery unless backed by a real connector or external receipt.",
     });
 });
+server.tool("order_fulfill_webhook", "Send a local order to a configured vendor webhook connector and record the fulfillment request.", {
+    orderId: z.string().min(1),
+    connectorId: z.string().min(1).optional().describe("Optional connector id. Defaults to the enabled connector for the order vendor."),
+    allowUnpaid: z.boolean().optional().describe("Default false. Set true only for vendors that accept unpaid reservation/quote webhooks."),
+    allowRetry: z.boolean().optional().describe("Default false. Set true to resend an already requested fulfillment."),
+    extra: recordSchema.describe("Optional connector-specific fields to include in the webhook payload."),
+    confirm: z.literal("SEND_ORDER_WEBHOOK"),
+}, async ({ orderId, connectorId, allowUnpaid, allowRetry, extra }) => {
+    const current = await getOrder(orderId);
+    if (current.status === "cancelled") {
+        return errorText("cancelled orders cannot be sent to fulfillment");
+    }
+    if (current.status === "fulfilled_demo" || current.status === "fulfilled_manual") {
+        return errorText("fulfilled orders cannot be sent to fulfillment again");
+    }
+    if (current.status === "fulfillment_requested" && !allowRetry) {
+        return errorText("order already has a fulfillment request; set allowRetry=true to send another webhook");
+    }
+    if (!allowUnpaid && current.status !== "paid") {
+        return errorText("order must be marked paid before webhook fulfillment unless allowUnpaid=true");
+    }
+    const connector = await resolveConnector({ connectorId, vendorId: current.vendorId });
+    const payload = {
+        schemaVersion: 1,
+        type: "order_fulfillment_request",
+        network: NETWORK,
+        chainId: CHAIN_ID,
+        createdAt: new Date().toISOString(),
+        order: {
+            id: current.id,
+            status: current.status,
+            vendorId: current.vendorId,
+            vendorDisplayName: current.vendorDisplayName,
+            itemId: current.itemId,
+            itemName: current.itemName,
+            quantity: current.quantity,
+            amount: current.amount,
+            asset: current.asset,
+            fulfillmentFields: current.fulfillmentFields,
+            payment: current.payment,
+        },
+        extra: extra ?? {},
+    };
+    let response;
+    try {
+        response = await sendConnectorJson(connector, payload);
+    }
+    catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const order = await updateOrder(current.id, {}, {
+            type: "fulfillment_webhook_failed",
+            data: { connector: redactConnector(connector), error: message },
+        });
+        const receipt = await addReceipt({
+            kind: "order_fulfill_webhook",
+            status: "failed",
+            network: NETWORK,
+            chainId: CHAIN_ID,
+            title: `Order webhook failed ${order.id}`,
+            summary: `${connector.id}: ${message}`,
+            to: order.vendorAddress,
+            amount: order.amount,
+            asset: order.asset,
+            result: { order, connector: redactConnector(connector), error: message },
+            error: message,
+        });
+        return errorJson({ order, connector: redactConnector(connector), receipt, error: message });
+    }
+    if (!response.ok) {
+        const order = await updateOrder(current.id, {}, {
+            type: "fulfillment_webhook_failed",
+            data: { connector: redactConnector(connector), response },
+        });
+        const receipt = await addReceipt({
+            kind: "order_fulfill_webhook",
+            status: "failed",
+            network: NETWORK,
+            chainId: CHAIN_ID,
+            title: `Order webhook rejected ${order.id}`,
+            summary: `${connector.id}: HTTP ${response.status}`,
+            to: order.vendorAddress,
+            amount: order.amount,
+            asset: order.asset,
+            result: { order, connector: redactConnector(connector), response },
+            error: `HTTP ${response.status}`,
+        });
+        return errorJson({ order, connector: redactConnector(connector), response, receipt });
+    }
+    const confirmation = connectorResponseReference(response.responseBody, `webhook_${Date.now()}_${randomUUID().slice(0, 8)}`);
+    const order = await updateOrder(current.id, {
+        status: "fulfillment_requested",
+        fulfillment: {
+            adapter: "webhook",
+            confirmation,
+            requestedAt: new Date().toISOString(),
+            connectorId: connector.id,
+            responseStatus: response.status,
+            responseHash: response.responseHash,
+        },
+    }, {
+        type: "fulfillment_webhook_sent",
+        data: { connector: redactConnector(connector), response },
+    });
+    const receipt = await addReceipt({
+        kind: "order_fulfill_webhook",
+        status: "submitted",
+        network: NETWORK,
+        chainId: CHAIN_ID,
+        title: `Order webhook sent ${order.id}`,
+        summary: `${connector.id}: HTTP ${response.status}`,
+        to: order.vendorAddress,
+        amount: order.amount,
+        asset: order.asset,
+        result: { order, connector: redactConnector(connector), response },
+    });
+    return text({
+        order,
+        connector: redactConnector(connector),
+        response,
+        receipt,
+        warning: "Webhook acceptance is not final delivery proof. Use order_fulfill_manual when vendor-side evidence confirms fulfillment.",
+    });
+});
 server.tool("booking_request_create", "Create a local service-booking request and canonical book_service runbook draft.", {
     vendorId: z.string().min(1),
     service: z.string().optional().describe("Requested service, e.g. plumber, flight ticket, pizza delivery."),
@@ -3059,6 +3325,118 @@ server.tool("booking_accept_demo", "Mark a local booking accepted by a demo prov
     return text({
         booking,
         warning: "Demo acceptance only. No real provider was contacted.",
+    });
+});
+server.tool("booking_send_webhook", "Send a local service booking request to a configured vendor webhook connector.", {
+    bookingId: z.string().min(1),
+    connectorId: z.string().min(1).optional().describe("Optional connector id. Defaults to the enabled connector for the booking vendor."),
+    allowRetry: z.boolean().optional().describe("Default false. Set true to resend an already requested booking."),
+    extra: recordSchema.describe("Optional connector-specific fields to include in the webhook payload."),
+    confirm: z.literal("SEND_BOOKING_WEBHOOK"),
+}, async ({ bookingId, connectorId, allowRetry, extra }) => {
+    const current = await getBooking(bookingId);
+    if (current.status === "cancelled" || current.status === "completed_demo" || current.status === "disputed_demo") {
+        return errorText(`booking '${bookingId}' cannot be sent from status ${current.status}`);
+    }
+    if (current.status === "provider_requested" && !allowRetry) {
+        return errorText("booking already has a provider request; set allowRetry=true to send another webhook");
+    }
+    const connector = await resolveConnector({ connectorId, vendorId: current.vendorId });
+    const payload = {
+        schemaVersion: 1,
+        type: "booking_request",
+        network: NETWORK,
+        chainId: CHAIN_ID,
+        createdAt: new Date().toISOString(),
+        booking: {
+            id: current.id,
+            status: current.status,
+            vendorId: current.vendorId,
+            vendorDisplayName: current.vendorDisplayName,
+            service: current.service,
+            amount: current.amount,
+            asset: current.asset,
+            requestedWindow: current.requestedWindow,
+            location: current.location,
+            bookingFields: current.bookingFields,
+            paymentTxHash: current.paymentTxHash,
+            escrow: current.escrow,
+        },
+        extra: extra ?? {},
+    };
+    let response;
+    try {
+        response = await sendConnectorJson(connector, payload);
+    }
+    catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const booking = await updateBooking(current.id, {}, {
+            type: "booking_webhook_failed",
+            data: { connector: redactConnector(connector), error: message },
+        });
+        const receipt = await addReceipt({
+            kind: "booking_send_webhook",
+            status: "failed",
+            network: NETWORK,
+            chainId: CHAIN_ID,
+            title: `Booking webhook failed ${booking.id}`,
+            summary: `${connector.id}: ${message}`,
+            to: booking.vendorAddress,
+            amount: booking.amount,
+            asset: booking.asset,
+            result: { booking, connector: redactConnector(connector), error: message },
+            error: message,
+        });
+        return errorJson({ booking, connector: redactConnector(connector), receipt, error: message });
+    }
+    if (!response.ok) {
+        const booking = await updateBooking(current.id, {}, {
+            type: "booking_webhook_failed",
+            data: { connector: redactConnector(connector), response },
+        });
+        const receipt = await addReceipt({
+            kind: "booking_send_webhook",
+            status: "failed",
+            network: NETWORK,
+            chainId: CHAIN_ID,
+            title: `Booking webhook rejected ${booking.id}`,
+            summary: `${connector.id}: HTTP ${response.status}`,
+            to: booking.vendorAddress,
+            amount: booking.amount,
+            asset: booking.asset,
+            result: { booking, connector: redactConnector(connector), response },
+            error: `HTTP ${response.status}`,
+        });
+        return errorJson({ booking, connector: redactConnector(connector), response, receipt });
+    }
+    const booking = await updateBooking(current.id, {
+        status: "provider_requested",
+    }, {
+        type: "booking_webhook_sent",
+        data: {
+            connector: redactConnector(connector),
+            response,
+            reference: connectorResponseReference(response.responseBody, `booking_webhook_${Date.now()}_${randomUUID().slice(0, 8)}`),
+        },
+    });
+    const receipt = await addReceipt({
+        kind: "booking_send_webhook",
+        status: "submitted",
+        network: NETWORK,
+        chainId: CHAIN_ID,
+        title: `Booking webhook sent ${booking.id}`,
+        summary: `${connector.id}: HTTP ${response.status}`,
+        to: booking.vendorAddress,
+        amount: booking.amount,
+        asset: booking.asset,
+        result: { booking, connector: redactConnector(connector), response },
+    });
+    return text({
+        booking,
+        connector: redactConnector(connector),
+        response,
+        receipt,
+        warning: "Webhook acceptance is not final service acceptance. Use booking_accept_demo or a future provider confirmation adapter when vendor-side evidence is available.",
     });
 });
 server.tool("booking_prepare_escrow", "Prepare an open_escrow runbook draft for a local booking.", {
