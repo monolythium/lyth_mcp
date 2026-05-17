@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "set_spending_policy",
+  "status": "draft_only",
+  "purpose": "Draft an agent spending-policy update for wallet approval.",
+  "requiredFields": ["agentAddress", "policy"],
+  "optionalFields": ["policyId", "expiresAt", "memo"],
+  "approvalRequired": true,
+  "steps": [
+    "check_policy_authority",
+    "render_policy",
+    "request_approval",
+    "apply_policy",
+    "verify_policy"
+  ]
+}

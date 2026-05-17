@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "name": "verify_receipt",
+  "status": "live_read",
+  "purpose": "Read and verify a transaction receipt on the live chain.",
+  "requiredFields": ["txHash"],
+  "optionalFields": ["expectedSender", "expectedRecipient", "expectedAmount", "expectedAsset"],
+  "approvalRequired": false,
+  "steps": [
+    "fetch_receipt",
+    "decode_receipt",
+    "match_expectation",
+    "report_status"
+  ]
+}

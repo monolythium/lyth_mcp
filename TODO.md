@@ -48,6 +48,7 @@ Legend:
 - [x] Transfer preflight, RPC health scoring, tx watcher, and bucketed low-value accounting.
 - [x] Low-value reservation expiry/manual release and approval summary rendering.
 - [x] Local canonical runbook registry tools with stable content hashes.
+- [x] Draft/validate/prepare flows attach canonical runbook metadata and required-field checks.
 - [x] Local addressbook with named-recipient transfer resolution.
 - [x] Demo vendor registry with pizza, flight, plumber, gift-card, and legal-review examples.
 - [x] Draft runbooks for payment, service booking, escrow, trade, policy, receipt, and vendor-rating flows.
@@ -171,6 +172,9 @@ Whitepaper refs: §10, §24, §27.3-§27.7.
   - Current MCP implementation uses stable canonical JSON and `sha256:` content hashes for bundled runbook files.
   - Tools: `runbook_list`, `runbook_get`, `runbook_verify`, `runbook_diff_versions`.
   - Future SDK/protocol version should upgrade this to signed registry metadata and the final hash algorithm.
+- [x] **MCP** Attach canonical runbook definitions to draft/validate/prepare flows.
+  - Drafts include runbook id, version, content hash, required fields, optional fields, and missing required fields.
+  - Validation fails when required canonical fields are absent.
 - [ ] **MCP** Replace current ad hoc runbook drafts with canonical runbook loading/validation.
   - Runbooks live in SDK releases or bundled verified registry.
   - MCP verifies content hash before use.

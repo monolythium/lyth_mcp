@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "name": "rate_vendor",
+  "status": "draft_only",
+  "purpose": "Draft a vendor reputation update after a completed payment or escrow.",
+  "requiredFields": ["vendorId", "rating", "receipt"],
+  "optionalFields": ["comment", "quality", "speed", "communication", "accuracy"],
+  "approvalRequired": true,
+  "steps": [
+    "verify_receipt",
+    "render_rating",
+    "request_approval",
+    "submit_rating"
+  ]
+}

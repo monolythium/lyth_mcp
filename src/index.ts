@@ -46,6 +46,7 @@ import {
   diffRunbookContent,
   getCanonicalRunbook,
   listCanonicalRunbooks,
+  type CanonicalRunbook,
 } from "./runbooks.js";
 import {
   buildTransfer,
@@ -145,6 +146,17 @@ interface RunbookDraft {
   };
   steps: Array<{ id: string; title: string; detail: string }>;
   walletRequests: Array<Record<string, unknown>>;
+  canonicalRunbook?: {
+    id: string;
+    name: string;
+    version: string;
+    contentHash: string;
+    hashAlgorithm: "sha256";
+    requiredFields: string[];
+    optionalFields: string[];
+    missingRequiredFields: string[];
+    verifiedAt: string;
+  };
   risks: string[];
   notes: string[];
 }
@@ -523,12 +535,50 @@ function runbookCatalogue() {
   ];
 }
 
+async function canonicalRunbookFor(name: RunbookName): Promise<CanonicalRunbook | null> {
+  try {
+    return await getCanonicalRunbook(RUNBOOK_REGISTRY_PATH, name);
+  } catch {
+    return null;
+  }
+}
+
+function canonicalRunbookReference(runbook: CanonicalRunbook, fields: Record<string, unknown>): RunbookDraft["canonicalRunbook"] {
+  const requiredFields = stringArrayField(runbook.content, "requiredFields");
+  const optionalFields = stringArrayField(runbook.content, "optionalFields");
+  return {
+    id: runbook.id,
+    name: runbook.name,
+    version: runbook.version,
+    contentHash: runbook.contentHash,
+    hashAlgorithm: runbook.hashAlgorithm,
+    requiredFields,
+    optionalFields,
+    missingRequiredFields: requiredFields.filter((field) => isMissingRunbookField(fields, field)),
+    verifiedAt: new Date().toISOString(),
+  };
+}
+
+function stringArrayField(value: unknown, field: string): string[] {
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  const raw = (value as Record<string, unknown>)[field];
+  return Array.isArray(raw) ? raw.filter((item): item is string => typeof item === "string") : [];
+}
+
+function isMissingRunbookField(fields: Record<string, unknown>, field: string): boolean {
+  const value = fields[field];
+  return value === undefined || value === null || value === "";
+}
+
 function buildRunbookDraft(args: {
   runbook: RunbookName;
   fields?: Record<string, unknown>;
   policy?: SpendingPolicy;
   agent?: Record<string, unknown>;
   principal?: Record<string, unknown>;
+  canonicalRunbook?: CanonicalRunbook | null;
 }): RunbookDraft {
   const fields = args.fields ?? {};
   const policy = args.policy ?? {};
@@ -547,6 +597,12 @@ function buildRunbookDraft(args: {
     "This runbook is a typed intent. It is not a signed transaction.",
     "Use prepare_wallet_request for wallet-compatible approval payloads where supported.",
   ];
+  const canonicalRunbook = args.canonicalRunbook ? canonicalRunbookReference(args.canonicalRunbook, fields) : undefined;
+  if (canonicalRunbook) {
+    notes.push(`Canonical runbook ${canonicalRunbook.id} verified with ${canonicalRunbook.contentHash}.`);
+  } else {
+    notes.push("No bundled canonical runbook definition is available for this runbook yet.");
+  }
 
   let title: string = args.runbook;
   let status: RunbookDraft["status"] = "draft_only";
@@ -707,9 +763,23 @@ function buildRunbookDraft(args: {
     liveExecution,
     steps,
     walletRequests,
+    canonicalRunbook,
     risks,
     notes,
   };
+}
+
+async function buildVerifiedRunbookDraft(args: {
+  runbook: RunbookName;
+  fields?: Record<string, unknown>;
+  policy?: SpendingPolicy;
+  agent?: Record<string, unknown>;
+  principal?: Record<string, unknown>;
+}): Promise<RunbookDraft> {
+  return buildRunbookDraft({
+    ...args,
+    canonicalRunbook: await canonicalRunbookFor(args.runbook),
+  });
 }
 
 function approvalPromptFor(runbook: RunbookName, fields: Record<string, unknown>): string {
@@ -749,6 +819,12 @@ function validateRunbook(draft: RunbookDraft) {
 
   if (!draft.approval?.required) {
     violations.push("approval.required must be true for economic runbooks.");
+  }
+  for (const field of draft.canonicalRunbook?.missingRequiredFields ?? []) {
+    violations.push(`missing required runbook field: ${field}`);
+  }
+  if (!draft.canonicalRunbook) {
+    warnings.push("No canonical runbook definition was attached to this draft.");
   }
   if (amount) {
     try {
@@ -2372,10 +2448,12 @@ server.tool(
 );
 
 server.tool("list_runbooks", "List supported AI runbooks and their live-readiness status.", {}, async () => {
+  const canonicalRunbooks = await listCanonicalRunbooks(RUNBOOK_REGISTRY_PATH);
   return text({
     network: NETWORK,
     chainId: CHAIN_ID,
     runbooks: runbookCatalogue(),
+    canonicalRunbooks,
     safety: {
       walletStorage: "optional local encrypted MCP wallet store; no plaintext keys or mnemonics",
       approval: "all economic actions require wallet/user approval",
@@ -2467,7 +2545,7 @@ server.tool(
     agent: recordSchema.describe("Optional agent identity metadata."),
     principal: recordSchema.describe("Optional human or organization principal metadata."),
   },
-  async (args) => text(buildRunbookDraft(args)),
+  async (args) => text(await buildVerifiedRunbookDraft(args)),
 );
 
 server.tool(
@@ -2481,7 +2559,7 @@ server.tool(
     principal: recordSchema,
   },
   async (args) => {
-    const draft = buildRunbookDraft(args);
+    const draft = await buildVerifiedRunbookDraft(args);
     return text({ draft, validation: validateRunbook(draft) });
   },
 );
@@ -2498,7 +2576,7 @@ server.tool(
     principal: recordSchema,
   },
   async ({ from, ...args }) => {
-    const draft = buildRunbookDraft(args);
+    const draft = await buildVerifiedRunbookDraft(args);
     return text({ draft, prepared: prepareWalletRequest(draft, from) });
   },
 );

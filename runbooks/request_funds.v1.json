@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "name": "request_funds",
+  "status": "draft_only",
+  "purpose": "Ask a principal to fund an agent wallet for a bounded task.",
+  "requiredFields": ["agentAddress", "amount", "asset", "purpose"],
+  "optionalFields": ["expiresAt", "principalAddress", "memo"],
+  "approvalRequired": true,
+  "steps": [
+    "check_policy",
+    "show_address",
+    "request_approval",
+    "verify_funds"
+  ]
+}

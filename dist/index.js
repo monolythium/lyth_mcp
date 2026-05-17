@@ -380,6 +380,40 @@ function runbookCatalogue() {
         },
     ];
 }
+async function canonicalRunbookFor(name) {
+    try {
+        return await getCanonicalRunbook(RUNBOOK_REGISTRY_PATH, name);
+    }
+    catch {
+        return null;
+    }
+}
+function canonicalRunbookReference(runbook, fields) {
+    const requiredFields = stringArrayField(runbook.content, "requiredFields");
+    const optionalFields = stringArrayField(runbook.content, "optionalFields");
+    return {
+        id: runbook.id,
+        name: runbook.name,
+        version: runbook.version,
+        contentHash: runbook.contentHash,
+        hashAlgorithm: runbook.hashAlgorithm,
+        requiredFields,
+        optionalFields,
+        missingRequiredFields: requiredFields.filter((field) => isMissingRunbookField(fields, field)),
+        verifiedAt: new Date().toISOString(),
+    };
+}
+function stringArrayField(value, field) {
+    if (!value || typeof value !== "object") {
+        return [];
+    }
+    const raw = value[field];
+    return Array.isArray(raw) ? raw.filter((item) => typeof item === "string") : [];
+}
+function isMissingRunbookField(fields, field) {
+    const value = fields[field];
+    return value === undefined || value === null || value === "";
+}
 function buildRunbookDraft(args) {
     const fields = args.fields ?? {};
     const policy = args.policy ?? {};
@@ -398,6 +432,13 @@ function buildRunbookDraft(args) {
         "This runbook is a typed intent. It is not a signed transaction.",
         "Use prepare_wallet_request for wallet-compatible approval payloads where supported.",
     ];
+    const canonicalRunbook = args.canonicalRunbook ? canonicalRunbookReference(args.canonicalRunbook, fields) : undefined;
+    if (canonicalRunbook) {
+        notes.push(`Canonical runbook ${canonicalRunbook.id} verified with ${canonicalRunbook.contentHash}.`);
+    }
+    else {
+        notes.push("No bundled canonical runbook definition is available for this runbook yet.");
+    }
     let title = args.runbook;
     let status = "draft_only";
     let liveExecution = {
@@ -546,9 +587,16 @@ function buildRunbookDraft(args) {
         liveExecution,
         steps,
         walletRequests,
+        canonicalRunbook,
         risks,
         notes,
     };
+}
+async function buildVerifiedRunbookDraft(args) {
+    return buildRunbookDraft({
+        ...args,
+        canonicalRunbook: await canonicalRunbookFor(args.runbook),
+    });
 }
 function approvalPromptFor(runbook, fields) {
     const amount = fields.amount ? `${fields.amount} ${String(fields.asset ?? "LYTH").toUpperCase()}` : "the requested amount";
@@ -585,6 +633,12 @@ function validateRunbook(draft) {
     const category = String(fields.category ?? fields.serviceCategory ?? "");
     if (!draft.approval?.required) {
         violations.push("approval.required must be true for economic runbooks.");
+    }
+    for (const field of draft.canonicalRunbook?.missingRequiredFields ?? []) {
+        violations.push(`missing required runbook field: ${field}`);
+    }
+    if (!draft.canonicalRunbook) {
+        warnings.push("No canonical runbook definition was attached to this draft.");
     }
     if (amount) {
         try {
@@ -2017,10 +2071,12 @@ server.tool("markets", "Read live CLOB markets and optional market details/order
     });
 });
 server.tool("list_runbooks", "List supported AI runbooks and their live-readiness status.", {}, async () => {
+    const canonicalRunbooks = await listCanonicalRunbooks(RUNBOOK_REGISTRY_PATH);
     return text({
         network: NETWORK,
         chainId: CHAIN_ID,
         runbooks: runbookCatalogue(),
+        canonicalRunbooks,
         safety: {
             walletStorage: "optional local encrypted MCP wallet store; no plaintext keys or mnemonics",
             approval: "all economic actions require wallet/user approval",
@@ -2088,7 +2144,7 @@ server.tool("draft_runbook", "Draft a typed AI runbook for payment, booking, esc
     policy: policySchema.describe("Optional spending policy constraints to evaluate while drafting."),
     agent: recordSchema.describe("Optional agent identity metadata."),
     principal: recordSchema.describe("Optional human or organization principal metadata."),
-}, async (args) => text(buildRunbookDraft(args)));
+}, async (args) => text(await buildVerifiedRunbookDraft(args)));
 server.tool("validate_runbook", "Validate a drafted runbook against spending-policy and MCP safety rules.", {
     runbook: runbookEnum,
     fields: recordSchema,
@@ -2096,7 +2152,7 @@ server.tool("validate_runbook", "Validate a drafted runbook against spending-pol
     agent: recordSchema,
     principal: recordSchema,
 }, async (args) => {
-    const draft = buildRunbookDraft(args);
+    const draft = await buildVerifiedRunbookDraft(args);
     return text({ draft, validation: validateRunbook(draft) });
 });
 server.tool("prepare_wallet_request", "Prepare a wallet approval payload from a runbook. MVP supports native LYTH pay_vendor transfers.", {
@@ -2107,7 +2163,7 @@ server.tool("prepare_wallet_request", "Prepare a wallet approval payload from a 
     agent: recordSchema,
     principal: recordSchema,
 }, async ({ from, ...args }) => {
-    const draft = buildRunbookDraft(args);
+    const draft = await buildVerifiedRunbookDraft(args);
     return text({ draft, prepared: prepareWalletRequest(draft, from) });
 });
 server.tool("submit_signed_transaction", "Broadcast an already-signed transaction/envelope. Disabled unless LYTH_MCP_ENABLE_SUBMIT=1. This tool never signs.", {

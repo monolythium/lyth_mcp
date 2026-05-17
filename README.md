@@ -255,6 +255,8 @@ runbooks/
 
 The MCP exposes those files through a local canonical registry. `runbook_list` returns stable `sha256:` content hashes, and `runbook_verify` can compare a runbook against an expected hash. This is a release-local integrity layer; the future target is signed SDK/protocol registry metadata.
 
+`draft_runbook`, `validate_runbook`, and `prepare_wallet_request` attach canonical metadata when a bundled runbook exists. Drafts include the runbook id, version, content hash, required fields, optional fields, and missing required fields. Validation fails if a canonical required field is absent.
+
 ## Wallet Setup
 
 For an explicit agent operating wallet, use `agent_wallet_create`. This records the wallet purpose and local caps, then returns a funding address:

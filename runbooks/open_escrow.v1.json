@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "open_escrow",
+  "status": "draft_only",
+  "purpose": "Draft escrow terms for deliverable-based work.",
+  "requiredFields": ["counterparty", "amount", "asset", "deliverable"],
+  "optionalFields": ["deadline", "arbiter", "acceptanceCriteria", "refundPolicy", "notes"],
+  "approvalRequired": true,
+  "steps": [
+    "check_policy",
+    "define_deliverable",
+    "request_approval",
+    "lock_funds",
+    "monitor_escrow"
+  ]
+}

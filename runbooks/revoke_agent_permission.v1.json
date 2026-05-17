@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "name": "revoke_agent_permission",
+  "status": "draft_only",
+  "purpose": "Draft revocation of an agent permission, allowance, or session.",
+  "requiredFields": ["agentAddress", "permissionId"],
+  "optionalFields": ["reason", "effectiveAt", "memo"],
+  "approvalRequired": true,
+  "steps": [
+    "select_permission",
+    "request_approval",
+    "submit_revoke",
+    "verify_revoke"
+  ]
+}
