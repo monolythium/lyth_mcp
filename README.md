@@ -120,6 +120,8 @@ After building, add an MCP server entry like this:
         "LYTH_MCP_ENABLE_SUBMIT": "0",
         "LYTH_MCP_WALLET_STORE": "/absolute/path/to/.lyth_mcp/wallets.json",
         "LYTH_MCP_HOT_KEY": "/absolute/path/to/.lyth_mcp/hot.key",
+        "LYTH_MCP_LOCAL_KEY": "/absolute/path/to/.lyth_mcp/local.key",
+        "LYTH_MCP_ADDRESSBOOK": "/absolute/path/to/.lyth_mcp/addressbook.json",
         "LYTH_MCP_VENDOR_REGISTRY": "/absolute/path/to/monolythium-vision/lyth_mcp/vendors.example.json"
       }
     }
@@ -148,6 +150,7 @@ examples/claude_desktop_config.json
 | `LYTH_MCP_WALLET_STORE` | `~/.lyth_mcp/wallets.json` | Local encrypted wallet store path |
 | `LYTH_MCP_HOT_KEY` | `~/.lyth_mcp/hot.key` | Local key file used only for opt-in low-value mode |
 | `LYTH_MCP_LOCAL_KEY` | `~/.lyth_mcp/local.key` | Local machine key used for passphrase-less agent wallets |
+| `LYTH_MCP_ADDRESSBOOK` | `~/.lyth_mcp/addressbook.json` | Local contact/addressbook store path |
 | `LYTH_MCP_WALLET_PASSPHRASE` | unset | Optional env passphrase for unattended passphrase signing; safer to pass per call |
 | `LYTH_MCP_DEFAULT_LOW_VALUE_MAX` | `10` | Default LYTH per-transaction cap for passphrase-less wallets |
 | `LYTH_MCP_DEFAULT_LOW_VALUE_DAILY_LIMIT` | `50` | Default LYTH daily cap for passphrase-less wallets |
@@ -195,6 +198,9 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `wallet_export_mnemonic` | Reveal a mnemonic after passphrase confirmation |
 | `wallet_delete` | Delete a local wallet from the store |
 | `wallet_build_transfer` | Build a native LYTH transfer and optionally sign an encrypted envelope |
+| `addressbook_add` | Add or update a named local contact |
+| `addressbook_lookup` | List or search local contacts |
+| `addressbook_remove` | Remove a named local contact |
 
 ## Supported Runbooks
 
@@ -264,7 +270,28 @@ Then the assistant can build and sign a small transfer without asking for the pa
 }
 ```
 
-Amounts above the low-value cap are blocked unless the wallet was passphrase-protected and the passphrase is supplied. Low-value accounting is updated when the MCP signs/builds the transaction, not when final settlement is observed.
+Named contacts can be stored in the local addressbook and then used directly as recipients:
+
+```json
+{
+  "name": "Neo",
+  "address": "0x2aa62149ac3a7f9316afeb299bbd17a4dcbb70b6",
+  "tags": ["team"]
+}
+```
+
+```json
+{
+  "walletName": "agent-main",
+  "to": "Neo",
+  "amount": "0.1",
+  "sign": true,
+  "allowLowValueSigning": true,
+  "broadcast": true
+}
+```
+
+Amounts above the low-value cap are blocked unless the wallet was passphrase-protected and the passphrase is supplied. Low-value accounting is reserved when the MCP creates a signed payload, not when final settlement is observed, because a signed payload can be submitted later. If broadcast fails, retry the returned `built.signed.encryptedEnvelopeHex` with `submit_signed_transaction`; do not rebuild the transfer unless you intentionally want a new signed payload and a new low-value reservation.
 
 ## Example: Pizza Payment Runbook
 
@@ -435,6 +462,8 @@ Supported broadcast modes:
 | `lyth_encrypted` | `lyth_submitEncrypted` |
 
 `submit_signed_transaction` only submits a payload that was signed elsewhere. `wallet_build_transfer` can sign from a local encrypted MCP wallet, but it still will not broadcast unless `LYTH_MCP_ENABLE_SUBMIT=1`.
+
+When `wallet_build_transfer` signs and broadcast fails, it returns `broadcastError` plus a `retry` object. Retry the exact same `payloadHex` with `submit_signed_transaction`. Rebuilding a transfer signs a fresh payload and reserves low-value allowance again.
 
 ## Production Notes
 

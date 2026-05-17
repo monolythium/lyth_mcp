@@ -5,6 +5,8 @@ const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
 const requiredFiles = [
+  "dist/addressbook.js",
+  "dist/addressbook.d.ts",
   "dist/index.js",
   "dist/index.d.ts",
   "dist/wallet.js",

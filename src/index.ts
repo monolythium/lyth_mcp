@@ -18,6 +18,13 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import {
+  addressbookInfo,
+  listAddressbookContacts,
+  removeAddressbookContact,
+  resolveAddressbookContact,
+  upsertAddressbookContact,
+} from "./addressbook.js";
+import {
   buildTransfer,
   configureLowValuePolicy,
   createWallet,
@@ -114,6 +121,17 @@ interface RunbookDraft {
   notes: string[];
 }
 
+interface ResolvedRecipient {
+  input: string;
+  address: string;
+  source: "literal" | "addressbook";
+  contact?: {
+    name: string;
+    note?: string;
+    tags?: string[];
+  };
+}
+
 function truncate(value: unknown, max = MAX_OUTPUT): string {
   const text = typeof value === "string" ? value : safeStringify(value);
   return text.length > max ? `${text.slice(0, max)}\n... (truncated)` : text;
@@ -163,6 +181,31 @@ function isAddress(value: string): boolean {
 
 function isWireAddress(value: string): boolean {
   return /^0x[0-9a-fA-F]{40}$/.test(value);
+}
+
+async function resolveRecipient(value: string): Promise<ResolvedRecipient | null> {
+  const input = value.trim();
+  if (isWireAddress(input)) {
+    return {
+      input,
+      address: input,
+      source: "literal",
+    };
+  }
+  const contact = await resolveAddressbookContact(input);
+  if (!contact) {
+    return null;
+  }
+  return {
+    input,
+    address: contact.address,
+    source: "addressbook",
+    contact: {
+      name: contact.name,
+      note: contact.note,
+      tags: contact.tags,
+    },
+  };
 }
 
 function toQuantity(value: bigint): string {
@@ -896,6 +939,55 @@ server.tool("wallet_list", "List local MCP wallets and low-value signing policy 
 });
 
 server.tool(
+  "addressbook_add",
+  "Add or update a local MCP addressbook contact. Use this before sending to named contacts.",
+  {
+    name: z.string().min(1),
+    address: z.string().describe("0x recipient address."),
+    note: z.string().optional(),
+    tags: z.array(z.string()).optional(),
+    overwrite: z.boolean().optional().describe("Replace existing contact with the same name. Default true."),
+  },
+  async ({ name, address, note, tags, overwrite }) => {
+    if (!isWireAddress(address)) {
+      return errorText("address must be a 0x wire address");
+    }
+    return text(await upsertAddressbookContact({
+      name,
+      address,
+      note,
+      tags,
+      overwrite,
+    }));
+  },
+);
+
+server.tool(
+  "addressbook_lookup",
+  "List or search local MCP addressbook contacts.",
+  {
+    query: z.string().optional().describe("Name, address, note, or tag filter. Omit to list all contacts."),
+    limit: z.number().min(1).max(100).optional(),
+  },
+  async ({ query, limit }) => {
+    const contacts = await listAddressbookContacts(query);
+    return text({
+      store: await addressbookInfo(),
+      contacts: contacts.slice(0, limit ?? 25),
+    });
+  },
+);
+
+server.tool(
+  "addressbook_remove",
+  "Remove a local MCP addressbook contact by name.",
+  {
+    name: z.string().min(1),
+  },
+  async ({ name }) => text(await removeAddressbookContact(name)),
+);
+
+server.tool(
   "wallet_configure_low_value",
   "Enable or disable no-passphrase low-value signing for a local agent wallet.",
   {
@@ -944,10 +1036,10 @@ server.tool(
 
 server.tool(
   "wallet_build_transfer",
-  "Build a native LYTH transfer from a stored MCP wallet. Can sign with passphrase or low-value hot mode. Broadcast is optional and gated.",
+  "Build a native LYTH transfer from a stored MCP wallet. Can sign with passphrase or low-value hot mode. Broadcast is optional and gated. If broadcast fails, retry the returned signed payload with submit_signed_transaction; do not rebuild.",
   {
     walletName: z.string().min(1),
-    to: z.string().describe("0x recipient address."),
+    to: z.string().describe("0x recipient address or exact addressbook contact name."),
     amount: z.string().describe("LYTH amount, e.g. 1.5."),
     passphrase: z.string().min(12).optional().describe("Required above low-value cap or when low-value mode is disabled."),
     sign: z.boolean().optional().describe("Sign encrypted envelope. Default true."),
@@ -959,8 +1051,9 @@ server.tool(
     nonce: z.string().optional().describe("Hex or decimal nonce. Defaults to live eth_getTransactionCount."),
   },
   async ({ walletName, to, amount, passphrase, sign, allowLowValueSigning, broadcast, gasLimit, maxFeePerGas, maxPriorityFeePerGas, nonce }) => {
-    if (!isWireAddress(to)) {
-      return errorText("to must be a 0x wire address for this MVP");
+    const recipient = await resolveRecipient(to);
+    if (!recipient) {
+      return errorText("to must be a 0x wire address or exact addressbook contact name");
     }
     const endpoint = await firstReachableEndpoint();
     const wallets = await listWallets();
@@ -984,7 +1077,7 @@ server.tool(
       : undefined;
     const built = await buildTransfer({
       walletName,
-      to,
+      to: recipient.address,
       amountUnits: decimalToUnits(amount),
       chainId: CHAIN_ID,
       nonce: resolvedNonce,
@@ -1000,6 +1093,7 @@ server.tool(
       return errorText("sign=true but no passphrase was supplied and low-value signing is not configured for this wallet");
     }
     let submitted: Record<string, unknown> | null = null;
+    let broadcastError: Record<string, unknown> | null = null;
     if (broadcast) {
       if (!SUBMIT_ENABLED) {
         return errorText("Broadcast disabled. Set LYTH_MCP_ENABLE_SUBMIT=1 to allow wallet_build_transfer broadcast.");
@@ -1007,17 +1101,40 @@ server.tool(
       if (!built.signed) {
         return errorText("Cannot broadcast unsigned transfer");
       }
-      submitted = {
-        endpoint,
-        method: "lyth_submitEncrypted",
-        txHash: await rpcCall(endpoint, "lyth_submitEncrypted", [built.signed.encryptedEnvelopeHex]),
-      };
+      try {
+        submitted = {
+          endpoint,
+          method: "lyth_submitEncrypted",
+          txHash: await rpcCall(endpoint, "lyth_submitEncrypted", [built.signed.encryptedEnvelopeHex]),
+        };
+      } catch (err) {
+        broadcastError = {
+          endpoint,
+          method: "lyth_submitEncrypted",
+          message: err instanceof Error ? err.message : String(err),
+        };
+      }
     }
     return text({
       endpoint,
+      recipient,
       built,
       submitted,
+      broadcastError,
       broadcastEnabled: SUBMIT_ENABLED,
+      retry: built.signed
+        ? {
+            tool: "submit_signed_transaction",
+            arguments: {
+              kind: "lyth_encrypted",
+              payloadHex: built.signed.encryptedEnvelopeHex,
+            },
+            warning: "If broadcast failed, retry this exact signed payload. Do not call wallet_build_transfer again unless you intentionally want a new signed transfer and a new low-value allowance reservation.",
+          }
+        : null,
+      lowValueAccounting: built.lowValuePolicy?.used
+        ? "Low-value allowance is reserved when the signed payload is created, not when broadcast succeeds, because a signed payload can be submitted later."
+        : "No low-value allowance was reserved for this build.",
     });
   },
 );
