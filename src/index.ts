@@ -50,6 +50,8 @@ const CHAIN_ID = Number(process.env.LYTH_CHAIN_ID ?? DEFAULT_CHAIN_ID);
 const REQUEST_TIMEOUT_MS = Number(process.env.LYTH_MCP_TIMEOUT_MS ?? 10_000);
 const MAX_OUTPUT = Number(process.env.LYTH_MCP_MAX_OUTPUT ?? 16_000);
 const SUBMIT_ENABLED = process.env.LYTH_MCP_ENABLE_SUBMIT === "1";
+const DEFAULT_LOW_VALUE_MAX = process.env.LYTH_MCP_DEFAULT_LOW_VALUE_MAX ?? "10";
+const DEFAULT_LOW_VALUE_DAILY_LIMIT = process.env.LYTH_MCP_DEFAULT_LOW_VALUE_DAILY_LIMIT ?? "50";
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_VENDOR_REGISTRY_PATH = resolve(PACKAGE_ROOT, "vendors.example.json");
 const VENDOR_REGISTRY_PATH = process.env.LYTH_MCP_VENDOR_REGISTRY || DEFAULT_VENDOR_REGISTRY_PATH;
@@ -127,6 +129,24 @@ function safeStringify(value: unknown): string {
 
 function text(value: unknown) {
   return { content: [{ type: "text" as const, text: truncate(value) }] };
+}
+
+function compactWallet(wallet: {
+  name: string;
+  address: string;
+  algorithm?: string;
+  keyProtection?: string;
+  createdAt: string;
+  lowValue?: unknown;
+}) {
+  return {
+    name: wallet.name,
+    address: wallet.address,
+    algorithm: wallet.algorithm,
+    keyProtection: wallet.keyProtection,
+    createdAt: wallet.createdAt,
+    lowValue: wallet.lowValue,
+  };
 }
 
 function errorText(message: string) {
@@ -752,37 +772,84 @@ server.tool("chain_status", "Probe Monolythium live RPC endpoints and return cha
 });
 
 server.tool(
+  "wallet_funding_address",
+  "Create or return a local testnet agent wallet address for funding. If missing, creates a local-machine encrypted wallet with capped low-value signing.",
+  {
+    name: z.string().min(1).optional().describe("Local wallet name. Default agent-main."),
+    createIfMissing: z.boolean().optional().describe("Create the wallet if it does not exist. Default true."),
+    lowValueMaxAmount: z.string().optional().describe(`Max LYTH per no-passphrase transaction. Default ${DEFAULT_LOW_VALUE_MAX}.`),
+    lowValueDailyLimit: z.string().optional().describe(`Daily LYTH cap for no-passphrase signing. Default ${DEFAULT_LOW_VALUE_DAILY_LIMIT}.`),
+  },
+  async ({ name, createIfMissing, lowValueMaxAmount, lowValueDailyLimit }) => {
+    const walletName = name ?? "agent-main";
+    const existing = (await listWallets()).find((wallet) => wallet.name === walletName);
+    if (existing) {
+      return text({
+        created: false,
+        wallet: compactWallet(existing),
+        fundingAddress: existing.address,
+        network: NETWORK,
+        chainId: CHAIN_ID,
+        warning: "This is a local MCP wallet address. Fund it only with testnet or capped agent funds.",
+      });
+    }
+    if (createIfMissing === false) {
+      return errorText(`wallet '${walletName}' not found`);
+    }
+    const wallet = await createWallet({
+      name: walletName,
+      allowLocalKey: true,
+      lowValue: {
+        enabled: true,
+        maxAmount: lowValueMaxAmount ?? DEFAULT_LOW_VALUE_MAX,
+        dailyLimit: lowValueDailyLimit ?? DEFAULT_LOW_VALUE_DAILY_LIMIT,
+      },
+    });
+    return text({
+      created: true,
+      wallet: compactWallet(wallet),
+      fundingAddress: wallet.address,
+      network: NETWORK,
+      chainId: CHAIN_ID,
+      warning: "Created a local-machine encrypted agent wallet. It can sign only within the configured low-value cap without a passphrase.",
+    });
+  },
+);
+
+server.tool(
   "wallet_setup",
-  "Create and store a local encrypted agent wallet. Optional low-value mode signs below a configured cap without asking the passphrase each time.",
+  "Create and store a local encrypted agent wallet. With no passphrase, creates a local-machine protected low-value wallet for testnet agent funding.",
   {
     name: z.string().min(1).describe("Local wallet name, e.g. agent-main."),
-    passphrase: z.string().min(12).optional().describe("Encryption passphrase. If omitted, LYTH_MCP_WALLET_PASSPHRASE must be set."),
+    passphrase: z.string().min(12).optional().describe("Encryption passphrase. If omitted, a local machine key is used and low-value mode defaults on."),
     revealMnemonic: z.boolean().optional().describe("Return the generated 24-word PQM-1 mnemonic once. Default false."),
     overwrite: z.boolean().optional().describe("Replace an existing wallet with the same name."),
-    lowValueNoPassphrase: z.boolean().optional().describe("Enable local hot mode for capped low-value spends."),
-    lowValueMaxAmount: z.string().optional().describe("Max LYTH per transaction for no-passphrase signing, e.g. 10."),
-    lowValueDailyLimit: z.string().optional().describe("Optional daily LYTH cap for no-passphrase signing, e.g. 50."),
+    lowValueNoPassphrase: z.boolean().optional().describe("Enable local hot mode for capped low-value spends. Defaults true when passphrase is omitted."),
+    lowValueMaxAmount: z.string().optional().describe(`Max LYTH per transaction for no-passphrase signing. Default ${DEFAULT_LOW_VALUE_MAX} in local-key mode.`),
+    lowValueDailyLimit: z.string().optional().describe(`Optional daily LYTH cap for no-passphrase signing. Default ${DEFAULT_LOW_VALUE_DAILY_LIMIT} in local-key mode.`),
   },
   async ({ name, passphrase, revealMnemonic, overwrite, lowValueNoPassphrase, lowValueMaxAmount, lowValueDailyLimit }) => {
-    if (lowValueNoPassphrase && !lowValueMaxAmount) {
-      return errorText("lowValueMaxAmount is required when lowValueNoPassphrase is enabled");
-    }
+    const hasPassphrase = Boolean(passphrase ?? process.env.LYTH_MCP_WALLET_PASSPHRASE);
+    const useLocalKey = !hasPassphrase && lowValueNoPassphrase !== false;
+    const enableLowValue = lowValueNoPassphrase ?? useLocalKey;
     const wallet = await createWallet({
       name,
       passphrase,
       revealMnemonic,
       overwrite,
-      lowValue: lowValueNoPassphrase
+      allowLocalKey: useLocalKey,
+      lowValue: enableLowValue
         ? {
             enabled: true,
-            maxAmount: lowValueMaxAmount!,
-            dailyLimit: lowValueDailyLimit,
+            maxAmount: lowValueMaxAmount ?? DEFAULT_LOW_VALUE_MAX,
+            dailyLimit: lowValueDailyLimit ?? (useLocalKey ? DEFAULT_LOW_VALUE_DAILY_LIMIT : undefined),
           }
         : undefined,
     });
     return text({
-      wallet,
-      warning: lowValueNoPassphrase
+      wallet: compactWallet(wallet),
+      fundingAddress: wallet.address,
+      warning: enableLowValue
         ? "Low-value mode is a local hot-wallet mode. Keep only capped funds in this agent wallet."
         : "Wallet is encrypted. Signing requires passphrase or later low-value setup.",
     });
@@ -802,18 +869,18 @@ server.tool(
     lowValueDailyLimit: z.string().optional(),
   },
   async ({ name, mnemonic, passphrase, overwrite, lowValueNoPassphrase, lowValueMaxAmount, lowValueDailyLimit }) => {
-    if (lowValueNoPassphrase && !lowValueMaxAmount) {
-      return errorText("lowValueMaxAmount is required when lowValueNoPassphrase is enabled");
-    }
+    const hasPassphrase = Boolean(passphrase ?? process.env.LYTH_MCP_WALLET_PASSPHRASE);
+    const useLocalKey = !hasPassphrase && lowValueNoPassphrase === true;
     return text(await importWallet({
       name,
       mnemonic,
       passphrase,
       overwrite,
+      allowLocalKey: useLocalKey,
       lowValue: lowValueNoPassphrase
         ? {
             enabled: true,
-            maxAmount: lowValueMaxAmount!,
+            maxAmount: lowValueMaxAmount ?? DEFAULT_LOW_VALUE_MAX,
             dailyLimit: lowValueDailyLimit,
           }
         : undefined,

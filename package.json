@@ -20,12 +20,11 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "prepare": "npm run build",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
-    "@monolythium/core-sdk": "git+https://github.com/monolythium-vision/mono-core-sdk.git#master",
+    "@monolythium/core-sdk": "https://github.com/monolythium-vision/mono-core-sdk/archive/ffeb897e4b710b4ee993a0c78bdde3f505009ae6.tar.gz",
     "zod": "^3.25.0"
   },
   "devDependencies": {

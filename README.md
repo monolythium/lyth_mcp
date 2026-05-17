@@ -4,7 +4,7 @@ Monolythium MCP server for live-chain reads and AI runbooks.
 
 `lyth-mcp` lets an AI assistant safely interact with the current live Monolythium testnet surface. It can read chain state, inspect accounts, look up transactions, list markets, discover local vendors, draft agent-commerce runbooks, validate spending policies, create a local encrypted agent wallet, and build native LYTH transfer transactions.
 
-It does **not** silently spend funds. By default it drafts wallet approval payloads and stores no plaintext secrets. If the user creates an MCP wallet, the mnemonic is encrypted locally. Signing requires a passphrase unless the user explicitly enables capped low-value mode for small agent spends.
+It does **not** silently spend funds. By default it drafts wallet approval payloads and stores no plaintext secrets. If the user creates an MCP wallet, the mnemonic is encrypted locally. Signing requires a passphrase unless the wallet is a local-machine protected agent wallet with capped low-value mode enabled.
 
 The first useful product shape is:
 
@@ -24,7 +24,7 @@ Default network:
 | Transaction signing | Supported for local MCP wallets by passphrase or opt-in low-value mode |
 | Transaction broadcast | Disabled by default |
 | Wallet storage | Optional encrypted local store at `~/.lyth_mcp/wallets.json` |
-| Low-value no-passphrase mode | Optional per-wallet cap and daily cap for test/agent wallets |
+| Low-value no-passphrase mode | Optional per-wallet cap and daily cap for test/agent wallets; default for passphrase-less funding wallets |
 | Native payment preparation | `pay_vendor` with native `LYTH` |
 | Token payment preparation | Draft-only until MRC/token routes are wired |
 | Escrow/trade/policy writes | Draft-only until the live write builders are wired |
@@ -45,7 +45,8 @@ The server is intentionally wallet-cautious:
 
 - no plaintext private keys or mnemonics;
 - local wallets are encrypted with AES-256-GCM and a scrypt-derived passphrase key;
-- passphrase signing is the default for stored wallets;
+- passphrase signing is the default for passphrase-protected wallets;
+- local-machine protected wallets are allowed for capped agent/testnet funding flows;
 - low-value mode is opt-in and should only be used for capped agent wallets;
 - no hidden approvals;
 - no default broadcasting;
@@ -134,7 +135,10 @@ examples/claude_desktop_config.json
 | `LYTH_MCP_ENABLE_SUBMIT` | `0` | Set to `1` to allow broadcasting already-signed payloads |
 | `LYTH_MCP_WALLET_STORE` | `~/.lyth_mcp/wallets.json` | Local encrypted wallet store path |
 | `LYTH_MCP_HOT_KEY` | `~/.lyth_mcp/hot.key` | Local key file used only for opt-in low-value mode |
+| `LYTH_MCP_LOCAL_KEY` | `~/.lyth_mcp/local.key` | Local machine key used for passphrase-less agent wallets |
 | `LYTH_MCP_WALLET_PASSPHRASE` | unset | Optional env passphrase for unattended passphrase signing; safer to pass per call |
+| `LYTH_MCP_DEFAULT_LOW_VALUE_MAX` | `10` | Default LYTH per-transaction cap for passphrase-less wallets |
+| `LYTH_MCP_DEFAULT_LOW_VALUE_DAILY_LIMIT` | `50` | Default LYTH daily cap for passphrase-less wallets |
 
 Use `LYTH_RPC_URLS` when you want the MCP to probe your own RPC fleet:
 
@@ -171,6 +175,7 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 
 | Tool | Purpose |
 |---|---|
+| `wallet_funding_address` | Create or return a local testnet agent wallet funding address |
 | `wallet_setup` | Create a local encrypted PQM-1/ML-DSA-65 agent wallet |
 | `wallet_import` | Import an existing PQM-1 mnemonic into the encrypted store |
 | `wallet_list` | List local wallets and low-value policy status |
@@ -201,6 +206,18 @@ runbooks/
 
 ## Wallet Setup
 
+For the fastest testnet demo, ask for a funding address. The MCP creates or returns a local-machine protected wallet named `agent-main` and enables capped no-passphrase signing:
+
+```json
+{
+  "name": "agent-main",
+  "lowValueMaxAmount": "10",
+  "lowValueDailyLimit": "50"
+}
+```
+
+The response includes `fundingAddress`. Send only testnet or capped agent funds there.
+
 Create a local agent wallet with passphrase protection:
 
 ```json
@@ -211,12 +228,11 @@ Create a local agent wallet with passphrase protection:
 }
 ```
 
-For testing small autonomous spends, the user can enable capped no-passphrase signing at setup:
+For testing small autonomous spends, the user can enable capped no-passphrase signing at setup. If `passphrase` is omitted, the MCP uses a local machine key and defaults low-value mode on:
 
 ```json
 {
   "name": "agent-main",
-  "passphrase": "use-a-real-long-passphrase",
   "lowValueNoPassphrase": true,
   "lowValueMaxAmount": "10",
   "lowValueDailyLimit": "50"
@@ -236,7 +252,7 @@ Then the assistant can build and sign a small transfer without asking for the pa
 }
 ```
 
-Amounts above the low-value cap require the passphrase. Low-value accounting is updated when the MCP signs/builds the transaction, not when final settlement is observed.
+Amounts above the low-value cap are blocked unless the wallet was passphrase-protected and the passphrase is supplied. Low-value accounting is updated when the MCP signs/builds the transaction, not when final settlement is observed.
 
 ## Example: Pizza Payment Runbook
 

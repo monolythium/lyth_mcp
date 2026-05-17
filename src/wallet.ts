@@ -31,6 +31,7 @@ export interface WalletRecord {
   address: string;
   publicKey: string;
   algorithm: "PQM1-MLDSA65";
+  keyProtection?: "passphrase" | "local_machine_key";
   createdAt: string;
   encryptedMnemonic: EncryptedPayload;
   lowValue?: LowValuePolicy;
@@ -72,6 +73,7 @@ export interface WalletSummary {
   address: string;
   publicKey: string;
   algorithm: WalletRecord["algorithm"];
+  keyProtection: "passphrase" | "local_machine_key";
   createdAt: string;
   lowValue?: Omit<LowValuePolicy, "encryptedMnemonic">;
 }
@@ -113,6 +115,10 @@ export function walletStorePath(): string {
 
 export function hotKeyPath(): string {
   return process.env.LYTH_MCP_HOT_KEY || join(homedir(), ".lyth_mcp", "hot.key");
+}
+
+export function localKeyPath(): string {
+  return process.env.LYTH_MCP_LOCAL_KEY || join(homedir(), ".lyth_mcp", "local.key");
 }
 
 export function resolvePassphrase(passphrase?: string): string {
@@ -162,6 +168,7 @@ export async function walletStoreInfo(path = walletStorePath()) {
     walletCount: store.wallets.length,
     wallets: store.wallets.map(summarizeWallet),
     hotKeyPath: hotKeyPath(),
+    localKeyPath: localKeyPath(),
     fileMode: mode,
   };
 }
@@ -171,13 +178,14 @@ export async function createWallet(args: {
   passphrase?: string;
   revealMnemonic?: boolean;
   overwrite?: boolean;
+  allowLocalKey?: boolean;
   lowValue?: {
     enabled: boolean;
     maxAmount: string;
     dailyLimit?: string;
   };
 }): Promise<WalletSummary & { mnemonic?: string; storePath: string }> {
-  const passphrase = resolvePassphrase(args.passphrase);
+  const key = await resolveNewWalletKey(args.passphrase, args.allowLocalKey === true);
   const store = await readWalletStore();
   const existing = store.wallets.find((w) => w.name === args.name);
   if (existing && !args.overwrite) {
@@ -191,8 +199,9 @@ export async function createWallet(args: {
     address: backend.getAddress(),
     publicKey: bytesToHex(backend.publicKey()),
     algorithm: "PQM1-MLDSA65",
+    keyProtection: key.protection,
     createdAt: new Date().toISOString(),
-    encryptedMnemonic: encryptSecret(mnemonic, passphrase),
+    encryptedMnemonic: encryptSecret(mnemonic, key.secret),
   };
   if (args.lowValue?.enabled) {
     record.lowValue = await createLowValuePolicy(mnemonic, args.lowValue.maxAmount, args.lowValue.dailyLimit);
@@ -215,13 +224,14 @@ export async function importWallet(args: {
   mnemonic: string;
   passphrase?: string;
   overwrite?: boolean;
+  allowLocalKey?: boolean;
   lowValue?: {
     enabled: boolean;
     maxAmount: string;
     dailyLimit?: string;
   };
 }): Promise<WalletSummary & { storePath: string }> {
-  const passphrase = resolvePassphrase(args.passphrase);
+  const key = await resolveNewWalletKey(args.passphrase, args.allowLocalKey === true);
   const address = pqm1MnemonicToAddress(args.mnemonic);
   const backend = pqm1MnemonicToMlDsa65Backend(args.mnemonic);
   const store = await readWalletStore();
@@ -234,8 +244,9 @@ export async function importWallet(args: {
     address,
     publicKey: bytesToHex(backend.publicKey()),
     algorithm: "PQM1-MLDSA65",
+    keyProtection: key.protection,
     createdAt: new Date().toISOString(),
-    encryptedMnemonic: encryptSecret(args.mnemonic, passphrase),
+    encryptedMnemonic: encryptSecret(args.mnemonic, key.secret),
   };
   if (args.lowValue?.enabled) {
     record.lowValue = await createLowValuePolicy(args.mnemonic, args.lowValue.maxAmount, args.lowValue.dailyLimit);
@@ -261,7 +272,7 @@ export async function getWallet(name: string): Promise<WalletRecord> {
 
 export async function exportMnemonic(name: string, passphrase?: string): Promise<string> {
   const record = await getWallet(name);
-  return decryptSecret(record.encryptedMnemonic, resolvePassphrase(passphrase));
+  return decryptSecret(record.encryptedMnemonic, await resolveWalletKey(record, passphrase));
 }
 
 export async function configureLowValuePolicy(args: {
@@ -285,7 +296,7 @@ export async function configureLowValuePolicy(args: {
   if (!args.maxAmount) {
     throw new Error("maxAmount is required when enabling low-value mode");
   }
-  const mnemonic = decryptSecret(record.encryptedMnemonic, resolvePassphrase(args.passphrase));
+  const mnemonic = decryptSecret(record.encryptedMnemonic, await resolveWalletKey(record, args.passphrase));
   record.lowValue = await createLowValuePolicy(mnemonic, args.maxAmount, args.dailyLimit);
   await writeWalletStore(store);
   return summarizeWallet(record);
@@ -405,6 +416,7 @@ export function summarizeWallet(record: WalletRecord): WalletSummary {
     address: record.address,
     publicKey: record.publicKey,
     algorithm: record.algorithm,
+    keyProtection: walletKeyProtection(record),
     createdAt: record.createdAt,
     lowValue: record.lowValue
       ? {
@@ -494,7 +506,7 @@ async function createLowValuePolicy(
     day: todayKey(),
     spentToday: "0",
     configuredAt: new Date().toISOString(),
-    encryptedMnemonic: encryptSecret(mnemonic, await readOrCreateHotKey()),
+    encryptedMnemonic: encryptSecret(mnemonic, await readOrCreateKey(hotKeyPath())),
   };
 }
 
@@ -504,7 +516,8 @@ async function resolveSigningBackend(args: {
   passphrase?: string;
   allowLowValueSigning: boolean;
 }): Promise<{ mode: "passphrase" | "low_value"; backend: MlDsa65Backend } | null> {
-  if (args.passphrase !== undefined || process.env.LYTH_MCP_WALLET_PASSPHRASE) {
+  const record = await getWallet(args.walletName);
+  if (walletKeyProtection(record) === "passphrase" && (args.passphrase !== undefined || process.env.LYTH_MCP_WALLET_PASSPHRASE)) {
     return {
       mode: "passphrase",
       backend: await unlockBackend(args.walletName, args.passphrase),
@@ -513,13 +526,12 @@ async function resolveSigningBackend(args: {
   if (!args.allowLowValueSigning) {
     return null;
   }
-  const record = await getWallet(args.walletName);
   const policy = record.lowValue;
   if (!policy?.enabled) {
     return null;
   }
   assertLowValueAllowed(policy, args.amountUnits);
-  const mnemonic = decryptSecret(policy.encryptedMnemonic, await readOrCreateHotKey());
+  const mnemonic = decryptSecret(policy.encryptedMnemonic, await readOrCreateKey(hotKeyPath()));
   return {
     mode: "low_value",
     backend: pqm1MnemonicToMlDsa65Backend(mnemonic),
@@ -563,7 +575,32 @@ async function recordLowValueSpend(
   return { remainingToday: unitsToDecimal(remaining < 0n ? 0n : remaining) };
 }
 
-async function readOrCreateHotKey(path = hotKeyPath()): Promise<string> {
+function walletKeyProtection(record: WalletRecord): "passphrase" | "local_machine_key" {
+  return record.keyProtection ?? "passphrase";
+}
+
+async function resolveNewWalletKey(
+  passphrase: string | undefined,
+  allowLocalKey: boolean,
+): Promise<{ protection: "passphrase" | "local_machine_key"; secret: string }> {
+  const configured = passphrase ?? process.env.LYTH_MCP_WALLET_PASSPHRASE;
+  if (configured) {
+    return { protection: "passphrase", secret: resolvePassphrase(passphrase) };
+  }
+  if (allowLocalKey) {
+    return { protection: "local_machine_key", secret: await readOrCreateKey(localKeyPath()) };
+  }
+  throw new Error("wallet passphrase missing; pass it explicitly, set LYTH_MCP_WALLET_PASSPHRASE, or use low-value local-key setup");
+}
+
+async function resolveWalletKey(record: WalletRecord, passphrase?: string): Promise<string> {
+  if (walletKeyProtection(record) === "local_machine_key") {
+    return readOrCreateKey(localKeyPath());
+  }
+  return resolvePassphrase(passphrase);
+}
+
+async function readOrCreateKey(path: string): Promise<string> {
   try {
     return (await readFile(path, "utf8")).trim();
   } catch (err) {

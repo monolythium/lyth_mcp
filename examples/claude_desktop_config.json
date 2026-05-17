@@ -9,6 +9,7 @@
         "LYTH_MCP_ENABLE_SUBMIT": "0",
         "LYTH_MCP_WALLET_STORE": "/absolute/path/to/.lyth_mcp/wallets.json",
         "LYTH_MCP_HOT_KEY": "/absolute/path/to/.lyth_mcp/hot.key",
+        "LYTH_MCP_LOCAL_KEY": "/absolute/path/to/.lyth_mcp/local.key",
         "LYTH_MCP_VENDOR_REGISTRY": "/absolute/path/to/lyth_mcp/vendors.example.json"
       }
     }
