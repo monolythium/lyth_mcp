@@ -418,9 +418,10 @@ Whitepaper refs: §27.8, §28.5, §99.3.
   - "Show EU clusters with GPU prover service."
   - "Which clusters are Foundation-controlled?"
   - "Which clusters maximize decentralization for my stake?"
-- [ ] **MCP** Transaction explanation.
+- [x] **MCP** Transaction explanation.
   - "Why did this transaction revert?"
   - Decode typed errors, policy failures, bridge failures, privacy cordon violations, and contract reverts.
+  - Implemented as `tx_error_explain` with local classifiers for RPC/broadcast errors, policy failures, privacy violations, bridge refusals, and generic reverts. Typed contract error decoding remains TODO(core).
 - [x] **MCP** Plain-English risk renderer.
   - Every money-moving flow outputs risks, assumptions, policy basis, and retry/receipt path.
   - Implemented as `risk_explain` plus integrated summaries in bridge quotes, merchant checks, order quotes/create/pay, booking creation, and provider onboarding drafts.

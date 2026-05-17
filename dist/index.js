@@ -25,6 +25,7 @@ import { commerceSafetySummary } from "./commerce_safety.js";
 import { createOrder, getOrder, listOrders, orderStoreInfo, updateOrder, } from "./orders.js";
 import { bookingStoreInfo, createBooking, getBooking, listBookings, updateBooking, } from "./bookings.js";
 import { createInvoice, getInvoice, invoiceStoreInfo, listInvoices, updateInvoice, } from "./invoices.js";
+import { explainError } from "./error_explain.js";
 import { evaluateMerchantPolicy, getMerchantPolicy, listMerchantPolicies, merchantPolicyStoreInfo, removeMerchantPolicy, upsertMerchantPolicy, } from "./merchant_policy.js";
 import { diffRunbookContent, getCanonicalRunbook, listCanonicalRunbooks, } from "./runbooks.js";
 import { renderRisk } from "./risk_renderer.js";
@@ -1793,6 +1794,15 @@ server.tool("agent_wallet_drain", "Prepare and optionally sign a transfer that d
         await configureLowValuePolicy({ name, enabled: false });
     }
     const paused = await updateAgentWalletMetadata({ name, patch: { paused: true, fallbackApproval: "deny" } });
+    const errorExplanation = broadcastError
+        ? explainError({
+            errorMessage: String(broadcastError.message ?? ""),
+            rpcMethod: "lyth_submitEncrypted",
+            tool: "agent_wallet_drain",
+            outboxId: outboxEntry?.id,
+            context: { broadcastError, preflight },
+        })
+        : null;
     const receipt = await addReceipt({
         kind: "agent_wallet_drain",
         status: submitted ? "submitted" : broadcastError ? "failed" : built.signed ? "signed" : "drafted",
@@ -1822,6 +1832,7 @@ server.tool("agent_wallet_drain", "Prepare and optionally sign a transfer that d
         outbox: outboxEntry,
         submitted,
         broadcastError,
+        errorExplanation,
         receipt,
         warning: "Drain disables low-value signing and marks the wallet paused. Existing signed payloads in the outbox may still be valid.",
     });
@@ -2069,6 +2080,15 @@ server.tool("wallet_build_transfer", "Build a native LYTH transfer from a stored
             }
         }
     }
+    const errorExplanation = broadcastError
+        ? explainError({
+            errorMessage: String(broadcastError.message ?? ""),
+            rpcMethod: "lyth_submitEncrypted",
+            tool: "wallet_build_transfer",
+            outboxId: outboxEntry?.id,
+            context: { broadcastError, preflight },
+        })
+        : null;
     const receipt = await addReceipt({
         kind: "wallet_transfer",
         status: submitted ? "submitted" : broadcastError ? "failed" : built.signed ? "signed" : "drafted",
@@ -2098,6 +2118,7 @@ server.tool("wallet_build_transfer", "Build a native LYTH transfer from a stored
         receipt,
         submitted,
         broadcastError,
+        errorExplanation,
         broadcastEnabled: SUBMIT_ENABLED,
         retry: built.signed
             ? {
@@ -2170,6 +2191,15 @@ server.tool("tx_lookup", "Look up a transaction by hash, including status, recei
         decoded: decoded.status === "fulfilled" ? decoded.value : { error: decoded.reason?.message ?? String(decoded.reason) },
     });
 });
+server.tool("tx_error_explain", "Explain a failed send, RPC error, policy failure, bridge refusal, privacy violation, or contract revert in plain English.", {
+    errorMessage: z.string().optional(),
+    code: z.union([z.string(), z.number()]).optional(),
+    rpcMethod: z.string().optional(),
+    tool: z.string().optional(),
+    txHash: z.string().optional(),
+    outboxId: z.string().optional(),
+    context: recordSchema,
+}, async (args) => text(explainError(args)));
 server.tool("search_chain", "Search live chain data for addresses, hashes, blocks, clusters, or labels.", {
     query: z.string(),
     limit: z.number().min(1).max(50).optional(),
@@ -2357,7 +2387,20 @@ server.tool("submit_signed_transaction", "Broadcast an already-signed transactio
             endpoint,
             error: message,
         });
-        return text({ endpoint, method, outbox, receipt, error: message });
+        return text({
+            endpoint,
+            method,
+            outbox,
+            receipt,
+            error: message,
+            errorExplanation: explainError({
+                errorMessage: message,
+                rpcMethod: method,
+                tool: "submit_signed_transaction",
+                outboxId,
+                context: { outbox },
+            }),
+        });
     }
 });
 server.tool("tx_outbox_list", "List local signed payloads that can be retried without rebuilding/re-signing.", {
@@ -2434,7 +2477,20 @@ server.tool("tx_outbox_retry", "Retry a signed payload from the local outbox. Re
             endpoint,
             error: message,
         });
-        return text({ endpoint, method, outbox, receipt, error: message });
+        return text({
+            endpoint,
+            method,
+            outbox,
+            receipt,
+            error: message,
+            errorExplanation: explainError({
+                errorMessage: message,
+                rpcMethod: method,
+                tool: "tx_outbox_retry",
+                outboxId: id,
+                context: { outbox },
+            }),
+        });
     }
 });
 server.tool("tx_outbox_forget", "Remove a local outbox entry. This does not invalidate an already-signed payload.", {

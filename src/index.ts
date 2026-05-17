@@ -104,6 +104,7 @@ import {
   updateInvoice,
   type InvoiceStatus,
 } from "./invoices.js";
+import { explainError } from "./error_explain.js";
 import {
   evaluateMerchantPolicy,
   getMerchantPolicy,
@@ -2186,6 +2187,15 @@ server.tool(
       await configureLowValuePolicy({ name, enabled: false });
     }
     const paused = await updateAgentWalletMetadata({ name, patch: { paused: true, fallbackApproval: "deny" } });
+    const errorExplanation = broadcastError
+      ? explainError({
+          errorMessage: String(broadcastError.message ?? ""),
+          rpcMethod: "lyth_submitEncrypted",
+          tool: "agent_wallet_drain",
+          outboxId: outboxEntry?.id,
+          context: { broadcastError, preflight },
+        })
+      : null;
     const receipt = await addReceipt({
       kind: "agent_wallet_drain",
       status: submitted ? "submitted" : broadcastError ? "failed" : built.signed ? "signed" : "drafted",
@@ -2215,6 +2225,7 @@ server.tool(
       outbox: outboxEntry,
       submitted,
       broadcastError,
+      errorExplanation,
       receipt,
       warning: "Drain disables low-value signing and marks the wallet paused. Existing signed payloads in the outbox may still be valid.",
     });
@@ -2506,6 +2517,15 @@ server.tool(
         }
       }
     }
+    const errorExplanation = broadcastError
+      ? explainError({
+          errorMessage: String(broadcastError.message ?? ""),
+          rpcMethod: "lyth_submitEncrypted",
+          tool: "wallet_build_transfer",
+          outboxId: outboxEntry?.id,
+          context: { broadcastError, preflight },
+        })
+      : null;
     const receipt = await addReceipt({
       kind: "wallet_transfer",
       status: submitted ? "submitted" : broadcastError ? "failed" : built.signed ? "signed" : "drafted",
@@ -2535,6 +2555,7 @@ server.tool(
       receipt,
       submitted,
       broadcastError,
+      errorExplanation,
       broadcastEnabled: SUBMIT_ENABLED,
       retry: built.signed
         ? {
@@ -2625,6 +2646,21 @@ server.tool(
       decoded: decoded.status === "fulfilled" ? decoded.value : { error: decoded.reason?.message ?? String(decoded.reason) },
     });
   },
+);
+
+server.tool(
+  "tx_error_explain",
+  "Explain a failed send, RPC error, policy failure, bridge refusal, privacy violation, or contract revert in plain English.",
+  {
+    errorMessage: z.string().optional(),
+    code: z.union([z.string(), z.number()]).optional(),
+    rpcMethod: z.string().optional(),
+    tool: z.string().optional(),
+    txHash: z.string().optional(),
+    outboxId: z.string().optional(),
+    context: recordSchema,
+  },
+  async (args) => text(explainError(args)),
 );
 
 server.tool(
@@ -2866,7 +2902,20 @@ server.tool(
         endpoint,
         error: message,
       });
-      return text({ endpoint, method, outbox, receipt, error: message });
+      return text({
+        endpoint,
+        method,
+        outbox,
+        receipt,
+        error: message,
+        errorExplanation: explainError({
+          errorMessage: message,
+          rpcMethod: method,
+          tool: "submit_signed_transaction",
+          outboxId,
+          context: { outbox },
+        }),
+      });
     }
   },
 );
@@ -2959,7 +3008,20 @@ server.tool(
         endpoint,
         error: message,
       });
-      return text({ endpoint, method, outbox, receipt, error: message });
+      return text({
+        endpoint,
+        method,
+        outbox,
+        receipt,
+        error: message,
+        errorExplanation: explainError({
+          errorMessage: message,
+          rpcMethod: method,
+          tool: "tx_outbox_retry",
+          outboxId: id,
+          context: { outbox },
+        }),
+      });
     }
   },
 );

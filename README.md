@@ -185,6 +185,7 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `account_overview` | Get balance, nonce, label, profile, and flow for an address |
 | `recent_transactions` | Read recent transactions from `lyth_txFeed` |
 | `tx_lookup` | Look up status, receipt, transaction, and decoded view by tx hash |
+| `tx_error_explain` | Explain failed sends, RPC errors, policy failures, bridge refusals, and reverts |
 | `tx_status_summary` | Summarize status by tx hash or outbox id |
 | `tx_watch` | Poll a tx hash or outbox id until confirmed, failed, or attempts are exhausted |
 | `search_chain` | Search addresses, hashes, blocks, clusters, and labels |
@@ -345,6 +346,8 @@ Use `contract_path_guidance` when a user asks to deploy Solidity or EVM bytecode
 `commerce_safety_check` applies a local client-side safety policy before vendor discovery, provider onboarding, orders, and bookings. It blocks obvious illicit-commerce requests and warns on restricted categories such as travel, gift cards, legal, medical, and regulated finance. This is not a protocol validity rule; it is a wallet/MCP guardrail so assistants do not help source illegal goods or services.
 
 `risk_explain` renders policy inputs into a Markdown summary with the operation, amount, counterparty, decision, violations, warnings, assumptions, receipt path, and retry path. The same renderer is now attached to bridge quotes, merchant checks, order quotes, order creation, order payment preparation, booking creation, and provider onboarding drafts.
+
+`tx_error_explain` turns raw failures into assistant-readable recovery guidance. It recognizes mempool encrypted-envelope failures, disabled broadcast, RPC outages, insufficient funds, nonce/duplicate payloads, privacy-denomination violations, commerce-safety refusals, merchant-policy blocks, bridge-route failures, and generic contract reverts. Failed `wallet_build_transfer`, `agent_wallet_drain`, `submit_signed_transaction`, and `tx_outbox_retry` responses include this explanation automatically.
 
 `provider_onboarding_draft` builds draft-only metadata for a future provider listing: local vendor registry record, merchant policy, availability placeholder, and optional webhook connector shape. It does not publish anything on-chain and includes `TODO(mainnet)` notes for real signed discovery metadata and provider verification.
 

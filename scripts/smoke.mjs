@@ -20,6 +20,7 @@ const assets = await import("../dist/assets.js");
 const runbooks = await import("../dist/runbooks.js");
 const commerceSafety = await import("../dist/commerce_safety.js");
 const riskRenderer = await import("../dist/risk_renderer.js");
+const errorExplain = await import("../dist/error_explain.js");
 
 function assert(condition, message) {
   if (!condition) {
@@ -146,6 +147,18 @@ assert(restrictedCommerce.ok === true && restrictedCommerce.level === "warn", "e
 assert(renderedRisk.ok === false && renderedRisk.level === "blocked", "expected risk renderer to block unsafe commerce");
 assert(renderedRisk.markdown.includes("Decision: blocked"), "expected risk renderer markdown decision");
 
+const mempoolError = errorExplain.explainError({
+  errorMessage: "lyth_submitEncrypted -32047: upstream unavailable: mempool: decryption failed",
+  rpcMethod: "lyth_submitEncrypted",
+  tool: "tx_outbox_retry",
+  outboxId: "outbox_test",
+});
+const privacyError = errorExplain.explainError({
+  context: { violations: ["Private-denominated pLYTH cannot be used for commerce."] },
+});
+assert(mempoolError.classification === "mempool_envelope_decryption" && mempoolError.retryable === true, "expected mempool decryption error to be retryable");
+assert(privacyError.classification === "privacy_policy" && privacyError.retryable === false, "expected privacy policy error to be blocked");
+
 const runbookList = await runbooks.listCanonicalRunbooks("./runbooks");
 assert(runbookList.length >= 9, "expected bundled canonical runbooks");
 
@@ -160,5 +173,6 @@ console.log(JSON.stringify({
   bridgeAlerts: bridgeAlerts.length,
   assets: assetRegistry.registry.assets.length,
   blockedCommerce: blockedCommerce.level,
+  explainedError: mempoolError.classification,
   runbooks: runbookList.length,
 }, null, 2));
