@@ -1167,6 +1167,47 @@ function short(value: string | undefined, left = 6, right = 4): string {
   return value.length <= left + right + 3 ? value : `${value.slice(0, left)}...${value.slice(-right)}`;
 }
 
+function extractTxHash(input: string): string | null {
+  return input.match(/\b0x[0-9a-fA-F]{64}\b/)?.[0] ?? null;
+}
+
+function extractAddress(input: string): string | null {
+  return input.match(/\b0x[0-9a-fA-F]{40}\b/)?.[0] ?? input.match(/\bmono1[0-9a-z]+\b/)?.[0] ?? null;
+}
+
+function extractDecimal(input: string): string | undefined {
+  return input.match(/\b\d+(?:\.\d+)?\b/)?.[0];
+}
+
+function inferSymbol(input: string, symbols: string[]): string | undefined {
+  const lower = input.toLowerCase();
+  return symbols.find((symbol) => new RegExp(`\\b${escapeRegex(symbol.toLowerCase())}\\b`, "i").test(lower));
+}
+
+function escapeRegex(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function askChainText(payload: Record<string, unknown>): string {
+  const sources = Array.isArray(payload.sources)
+    ? (payload.sources as unknown[]).map((source) => `- ${safeStringify(source).replace(/\n/g, " ")}`).join("\n")
+    : "- None";
+  return [
+    "# Ask Chain",
+    "",
+    `Intent: ${String(payload.intent ?? "unknown")}`,
+    `Typed tool: ${String(payload.typedTool ?? "none")}`,
+    "",
+    "## Sources",
+    sources,
+    "",
+    "## Result",
+    "```json",
+    safeStringify(payload.result ?? payload),
+    "```",
+  ].join("\n");
+}
+
 function defaultOutboxExpiresAt(): string {
   return new Date(Date.now() + DEFAULT_OUTBOX_EXPIRY_HOURS * 60 * 60 * 1000).toISOString();
 }
@@ -2661,6 +2702,220 @@ server.tool(
     context: recordSchema,
   },
   async (args) => text(explainError(args)),
+);
+
+server.tool(
+  "ask_chain",
+  "Route a natural-language blockchain question to a typed MCP path and return cited data sources.",
+  {
+    question: z.string().min(1),
+    format: z.enum(["json", "markdown"]).optional(),
+    limit: z.number().min(1).max(100).optional(),
+  },
+  async ({ question, format, limit }) => {
+    const lower = question.toLowerCase();
+    const asText = (payload: Record<string, unknown>) => format === "markdown" ? text(askChainText(payload)) : text(payload);
+    const txHash = extractTxHash(question);
+    if (txHash) {
+      const endpoint = await firstReachableEndpoint();
+      const [status, receipt, tx, decoded] = await Promise.allSettled([
+        rpcCall(endpoint, "lyth_txStatus", [txHash]),
+        rpcCall(endpoint, "eth_getTransactionReceipt", [txHash]),
+        rpcCall(endpoint, "eth_getTransactionByHash", [txHash]),
+        rpcCall(endpoint, "lyth_decodeTx", [txHash]),
+      ]);
+      return asText({
+        question,
+        intent: "transaction_lookup",
+        typedTool: "tx_lookup",
+        sources: [{ type: "rpc", endpoint, methods: ["lyth_txStatus", "eth_getTransactionReceipt", "eth_getTransactionByHash", "lyth_decodeTx"] }],
+        result: {
+          txHash,
+          status: status.status === "fulfilled" ? status.value : { error: status.reason?.message ?? String(status.reason) },
+          receipt: receipt.status === "fulfilled" ? receipt.value : { error: receipt.reason?.message ?? String(receipt.reason) },
+          transaction: tx.status === "fulfilled" ? tx.value : { error: tx.reason?.message ?? String(tx.reason) },
+          decoded: decoded.status === "fulfilled" ? decoded.value : { error: decoded.reason?.message ?? String(decoded.reason) },
+        },
+      });
+    }
+    const address = extractAddress(question);
+    if (address) {
+      const endpoint = await firstReachableEndpoint();
+      const [balance, nonce, profile, flow, label] = await Promise.allSettled([
+        rpcCall(endpoint, "eth_getBalance", [address, "latest"]),
+        rpcCall(endpoint, "eth_getTransactionCount", [address, "latest"]),
+        rpcCall(endpoint, "lyth_addressProfile", [address]),
+        rpcCall(endpoint, "lyth_addressFlow", [address, limit ?? 25]),
+        rpcCall(endpoint, "lyth_getAddressLabel", [address]),
+      ]);
+      return asText({
+        question,
+        intent: "account_overview",
+        typedTool: "account_overview",
+        sources: [{ type: "rpc", endpoint, methods: ["eth_getBalance", "eth_getTransactionCount", "lyth_addressProfile", "lyth_addressFlow", "lyth_getAddressLabel"] }],
+        result: {
+          address,
+          balance: balance.status === "fulfilled" ? balance.value : { error: balance.reason?.message ?? String(balance.reason) },
+          nonce: nonce.status === "fulfilled" ? parseQuantity(nonce.value).toString() : { error: nonce.reason?.message ?? String(nonce.reason) },
+          profile: profile.status === "fulfilled" ? profile.value : { error: profile.reason?.message ?? String(profile.reason) },
+          flow: flow.status === "fulfilled" ? flow.value : { error: flow.reason?.message ?? String(flow.reason) },
+          label: label.status === "fulfilled" ? label.value : { error: label.reason?.message ?? String(label.reason) },
+        },
+      });
+    }
+    if (/(error|failed|revert|decryption|mempool|policy|refused|rejected)/i.test(question)) {
+      return asText({
+        question,
+        intent: "error_explanation",
+        typedTool: "tx_error_explain",
+        sources: [{ type: "local_classifier", module: "error_explain" }],
+        result: explainError({ errorMessage: question, tool: "ask_chain" }),
+      });
+    }
+    if (/(status|health|sync|mempool|rpc)/i.test(question)) {
+      const endpoint = await firstReachableEndpoint();
+      const [stats, round, mempool, indexer, sync] = await Promise.allSettled([
+        rpcCall(endpoint, "lyth_chainStats"),
+        rpcCall(endpoint, "lyth_getRound"),
+        rpcCall(endpoint, "lyth_mempoolStatus"),
+        rpcCall(endpoint, "lyth_indexerStatus"),
+        rpcCall(endpoint, "eth_syncing"),
+      ]);
+      return asText({
+        question,
+        intent: "chain_status",
+        typedTool: "chain_status",
+        sources: [{ type: "rpc", endpoint, methods: ["lyth_chainStats", "lyth_getRound", "lyth_mempoolStatus", "lyth_indexerStatus", "eth_syncing"] }],
+        result: {
+          network: NETWORK,
+          chainId: CHAIN_ID,
+          stats: stats.status === "fulfilled" ? stats.value : { error: stats.reason?.message ?? String(stats.reason) },
+          round: round.status === "fulfilled" ? round.value : { error: round.reason?.message ?? String(round.reason) },
+          mempool: mempool.status === "fulfilled" ? mempool.value : { error: mempool.reason?.message ?? String(mempool.reason) },
+          indexer: indexer.status === "fulfilled" ? indexer.value : { error: indexer.reason?.message ?? String(indexer.reason) },
+          syncing: sync.status === "fulfilled" ? sync.value : { error: sync.reason?.message ?? String(sync.reason) },
+        },
+      });
+    }
+    if (/(vendor|provider|pizza|plumber|flight|gift\s*card|lawyer|legal|service|commerce)/i.test(question)) {
+      const commerceSafety = commerceSafetyForVendor({ query: question });
+      if (!commerceSafety.ok) {
+        return errorJson({
+          question,
+          intent: "vendor_search",
+          typedTool: "vendor_search",
+          commerceSafety,
+          refusal: "ask_chain refused vendor discovery by local commerce safety policy.",
+        });
+      }
+      const registry = await loadVendors();
+      const vendorQuery = lower.includes("pizza")
+        ? "pizza"
+        : lower.includes("plumber")
+          ? "plumber"
+          : lower.includes("flight")
+            ? "flight"
+            : lower.includes("gift")
+              ? "gift"
+              : lower.includes("lawyer") || lower.includes("legal")
+                ? "legal"
+                : question;
+      const category = lower.includes("pizza")
+        ? "food"
+        : lower.includes("plumber")
+          ? "home_services"
+          : lower.includes("flight")
+            ? "travel"
+            : lower.includes("gift")
+              ? "gift_cards"
+              : lower.includes("lawyer") || lower.includes("legal")
+                ? "professional_services"
+                : undefined;
+      return asText({
+        question,
+        intent: "vendor_search",
+        typedTool: "vendor_search",
+        sources: [{ type: "local_registry", path: VENDOR_REGISTRY_PATH, hash: registry.payloadHash }],
+        result: {
+          registry: vendorRegistrySummary(registry),
+          commerceSafety,
+          vendors: searchVendors(registry.registry, { query: vendorQuery, category, limit: limit ?? 10 }),
+          examples: [
+            "Find a plumber under 150 LYTH.",
+            "Find a pizza vendor.",
+            "Find a crypto lawyer available this week.",
+          ],
+        },
+      });
+    }
+    if (/(bridge|liquidity|route|cooldown|swap)/i.test(question)) {
+      const bridgeRegistry = await loadBridgeRoutes();
+      const assetRegistry = await loadAssets();
+      const symbol = inferSymbol(question, assetRegistry.registry.assets.map((asset) => asset.symbol));
+      const amount = extractDecimal(question);
+      const route = symbol ? selectBridgeRoute(bridgeRegistry.registry, { asset: symbol, destinationChain: "Monolythium" }) : null;
+      const quote = route && amount
+        ? quoteBridgeRoute(route, { amount, asset: symbol!, epochHours: bridgeRegistry.registry.epochHours })
+        : undefined;
+      return asText({
+        question,
+        intent: "bridge_routes",
+        typedTool: amount && route ? "bridge_quote" : "bridge_routes",
+        sources: [
+          { type: "local_registry", path: BRIDGE_ROUTE_REGISTRY_PATH, hash: bridgeRegistry.contentHash },
+          { type: "local_registry", path: ASSET_REGISTRY_PATH, hash: assetRegistry.contentHash },
+        ],
+        result: {
+          asset: symbol,
+          amount,
+          registry: bridgeRegistrySummary(bridgeRegistry),
+          quote,
+          routes: listBridgeRoutes(bridgeRegistry.registry, { asset: symbol, limit: limit ?? 10 }),
+        },
+      });
+    }
+    if (/(asset|token|coin|lyth|usdc|btc|privacy|private)/i.test(question)) {
+      const registry = await loadAssets();
+      const symbol = inferSymbol(question, registry.registry.assets.map((asset) => asset.symbol));
+      const assets = symbol
+        ? [getAsset(registry.registry, symbol)]
+        : listAssets(registry.registry, { query: question, limit: limit ?? 10 });
+      return asText({
+        question,
+        intent: "asset_search",
+        typedTool: symbol ? "asset_get" : "asset_search",
+        sources: [{ type: "local_registry", path: ASSET_REGISTRY_PATH, hash: registry.contentHash }],
+        result: {
+          registry: assetRegistrySummary(registry),
+          assets: assets.map((asset) => ({ ...asset, risk: assetRisk(asset) })),
+        },
+      });
+    }
+    if (/(market|clob|order\s*book|trades?)/i.test(question)) {
+      const endpoint = await firstReachableEndpoint();
+      return asText({
+        question,
+        intent: "markets",
+        typedTool: "markets",
+        sources: [{ type: "rpc", endpoint, methods: ["lyth_clobMarkets"] }],
+        result: await rpcCall(endpoint, "lyth_clobMarkets", [limit ?? 25]),
+      });
+    }
+    const endpoint = await firstReachableEndpoint();
+    return asText({
+      question,
+      intent: "chain_search",
+      typedTool: "search_chain",
+      sources: [{ type: "rpc", endpoint, methods: ["lyth_search"] }],
+      result: await rpcCall(endpoint, "lyth_search", [question, limit ?? 10]),
+      examples: [
+        "What is the status of the chain?",
+        "Show 0x... account overview.",
+        "Can I bridge 100 USDC?",
+        "Find a plumber under 150 LYTH.",
+      ],
+    });
+  },
 );
 
 server.tool(

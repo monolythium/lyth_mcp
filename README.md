@@ -186,6 +186,7 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `recent_transactions` | Read recent transactions from `lyth_txFeed` |
 | `tx_lookup` | Look up status, receipt, transaction, and decoded view by tx hash |
 | `tx_error_explain` | Explain failed sends, RPC errors, policy failures, bridge refusals, and reverts |
+| `ask_chain` | Route natural-language chain questions to typed MCP paths with cited sources |
 | `tx_status_summary` | Summarize status by tx hash or outbox id |
 | `tx_watch` | Poll a tx hash or outbox id until confirmed, failed, or attempts are exhausted |
 | `search_chain` | Search addresses, hashes, blocks, clusters, and labels |
@@ -348,6 +349,8 @@ Use `contract_path_guidance` when a user asks to deploy Solidity or EVM bytecode
 `risk_explain` renders policy inputs into a Markdown summary with the operation, amount, counterparty, decision, violations, warnings, assumptions, receipt path, and retry path. The same renderer is now attached to bridge quotes, merchant checks, order quotes, order creation, order payment preparation, booking creation, and provider onboarding drafts.
 
 `tx_error_explain` turns raw failures into assistant-readable recovery guidance. It recognizes mempool encrypted-envelope failures, disabled broadcast, RPC outages, insufficient funds, nonce/duplicate payloads, privacy-denomination violations, commerce-safety refusals, merchant-policy blocks, bridge-route failures, and generic contract reverts. Failed `wallet_build_transfer`, `agent_wallet_drain`, `submit_signed_transaction`, and `tx_outbox_retry` responses include this explanation automatically.
+
+`ask_chain` is a lightweight natural-language router. It maps common questions to typed MCP surfaces such as `chain_status`, `account_overview`, `tx_lookup`, `tx_error_explain`, `vendor_search`, `asset_search`, `bridge_routes`, `bridge_quote`, `markets`, or `search_chain`, and returns the source RPC methods or local registry hashes it used.
 
 `provider_onboarding_draft` builds draft-only metadata for a future provider listing: local vendor registry record, merchant policy, availability placeholder, and optional webhook connector shape. It does not publish anything on-chain and includes `TODO(mainnet)` notes for real signed discovery metadata and provider verification.
 

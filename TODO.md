@@ -408,12 +408,13 @@ Whitepaper refs: §27.8, §28.5, §99.3.
 
 - [ ] **SDK INDEXER** Typed NL query surface for chain state.
   - Queries compile to typed SDK calls, not arbitrary RPC JSON.
-- [ ] **MCP** "Ask the blockchain" tool.
+- [x] **MCP** "Ask the blockchain" tool.
   - `ask_chain` routes NL to typed tools and returns cited data sources.
-- [ ] **MCP** Agent-commerce search examples.
+- [x] **MCP** Agent-commerce search examples.
   - "Find a crypto lawyer with 4+ quality, available this week, under 5k."
   - "Find a plumber near me under 150 LYTH."
   - "Find an arbiter for a high-value escrow."
+  - Implemented initial examples through `ask_chain` vendor/provider routing. Reputation, availability, and arbiter indexes remain TODO(core/indexer).
 - [ ] **MCP** Cluster/operator search examples.
   - "Show EU clusters with GPU prover service."
   - "Which clusters are Foundation-controlled?"
