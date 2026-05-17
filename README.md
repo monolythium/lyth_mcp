@@ -70,6 +70,18 @@ The MCP is allowed to help. The user controls funding, policy, passphrases, and 
 
 ## Install
 
+Global install from GitHub:
+
+```bash
+npm install -g https://github.com/monolythium-vision/lyth_mcp/archive/refs/heads/main.tar.gz
+```
+
+If you specifically want npm's git resolver, use `--install-links=true` with npm 10:
+
+```bash
+npm install -g --install-links=true git+https://github.com/monolythium-vision/lyth_mcp.git
+```
+
 From this repository:
 
 ```bash
@@ -78,7 +90,7 @@ npm install
 npm run build
 ```
 
-`@monolythium/core-sdk` is installed from the public GitHub repo `monolythium-vision/mono-core-sdk`, so this MCP can be installed outside the local monorepo.
+`@monolythium/core-sdk` is installed from the public GitHub repo `monolythium-vision/mono-core-sdk` through a pinned HTTPS tarball, so this MCP can be installed outside the local monorepo without a nested git build.
 
 Run the server over stdio:
 
