@@ -750,6 +750,12 @@ Build:
 npm run build
 ```
 
+Smoke test built package output:
+
+```bash
+npm test
+```
+
 Run:
 
 ```bash

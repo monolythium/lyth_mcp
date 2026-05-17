@@ -15,6 +15,7 @@
     "examples",
     "runbooks",
     "scripts/verify-dist.cjs",
+    "scripts/smoke.mjs",
     "bridge_routes.example.json",
     "vendors.example.json"
   ],
@@ -23,6 +24,7 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
+    "test": "npm run build && node scripts/smoke.mjs",
     "prepare": "node scripts/verify-dist.cjs"
   },
   "dependencies": {

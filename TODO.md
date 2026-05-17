@@ -480,6 +480,7 @@ Whitepaper refs: §18, §22, §24.2, §26, §27, §29.5, §99.8.
 - [ ] **MCP** Documentation readiness.
   - User README, operator README, developer README, connector guide, security model, production deployment guide.
 - [ ] **MCP** Test readiness.
+  - Dist-based smoke test is implemented via `npm test` / `scripts/smoke.mjs` for stores, connectors, policies, bookings, orders, invoices, bridge routes, and runbooks.
   - Unit tests for stores, policies, addressbook, outbox, receipts.
   - Integration tests against mock RPC.
   - Live testnet smoke tests gated by env.
