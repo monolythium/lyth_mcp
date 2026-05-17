@@ -16,6 +16,7 @@ const bookings = await import("../dist/bookings.js");
 const orders = await import("../dist/orders.js");
 const invoices = await import("../dist/invoices.js");
 const bridges = await import("../dist/bridges.js");
+const assets = await import("../dist/assets.js");
 const runbooks = await import("../dist/runbooks.js");
 
 function assert(condition, message) {
@@ -116,6 +117,17 @@ const bridgeQuote = bridges.quoteBridgeRoute(bridgeRoute, {
 assert(bridgeQuote.executable === false, "expected draft bridge route to be non-executable");
 assert(bridgeQuote.cooldown.hours === 14, "expected one-epoch bridge cooldown");
 
+const assetRegistry = await assets.loadAssetRegistry("./asset_registry.example.json");
+const publicLyth = assets.getAsset(assetRegistry.registry, "LYTH");
+const privateLyth = assets.getAsset(assetRegistry.registry, "pLYTH");
+const wrappedUsdc = assets.getAsset(assetRegistry.registry, "mUSDC");
+const publicCommerce = assets.evaluateAssetUseCase(publicLyth, "commerce");
+const privateCommerce = assets.evaluateAssetUseCase(privateLyth, "commerce");
+const wrappedRisk = assets.assetRisk(wrappedUsdc);
+assert(publicCommerce.ok === true, "expected public LYTH commerce to be allowed");
+assert(privateCommerce.ok === false && privateCommerce.code === "PrivacyDenominationViolation", "expected private LYTH commerce violation");
+assert(wrappedRisk.labels.includes("bridge_route"), "expected wrapped USDC bridge route label");
+
 const runbookList = await runbooks.listCanonicalRunbooks("./runbooks");
 assert(runbookList.length >= 9, "expected bundled canonical runbooks");
 
@@ -127,5 +139,6 @@ console.log(JSON.stringify({
   booking: booking.id,
   invoice: invoice.id,
   bridgeRoute: bridgeRoute.id,
+  assets: assetRegistry.registry.assets.length,
   runbooks: runbookList.length,
 }, null, 2));

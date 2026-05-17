@@ -20,6 +20,7 @@ import { addOutboxEntry, forgetOutboxEntry, getOutboxEntry, listOutboxEntries, o
 import { addReceipt, getReceipt, listReceipts, receiptInfo, } from "./receipts.js";
 import { buildConnectorHeaders, connectorPayloadHash, connectorStoreInfo, getConnector, listConnectors, redactConnector, removeConnector, resolveConnector, upsertConnector, } from "./connectors.js";
 import { bridgeCooldownMatrix, bridgeRegistrySummary, bridgeStatusSummary, getBridgeRoute, listBridgeRoutes, loadBridgeRegistry, quoteBridgeRoute, selectBridgeRoute, } from "./bridges.js";
+import { assetRegistrySummary, assetRisk, evaluateAssetUseCase, getAsset, listAssets, loadAssetRegistry, privateDenominationWarning, } from "./assets.js";
 import { createOrder, getOrder, listOrders, orderStoreInfo, updateOrder, } from "./orders.js";
 import { bookingStoreInfo, createBooking, getBooking, listBookings, updateBooking, } from "./bookings.js";
 import { createInvoice, getInvoice, invoiceStoreInfo, listInvoices, updateInvoice, } from "./invoices.js";
@@ -53,6 +54,8 @@ const DEFAULT_OUTBOX_EXPIRY_HOURS = Number(process.env.LYTH_MCP_OUTBOX_EXPIRY_HO
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_VENDOR_REGISTRY_PATH = resolve(PACKAGE_ROOT, "vendors.example.json");
 const VENDOR_REGISTRY_PATH = process.env.LYTH_MCP_VENDOR_REGISTRY || DEFAULT_VENDOR_REGISTRY_PATH;
+const DEFAULT_ASSET_REGISTRY_PATH = resolve(PACKAGE_ROOT, "asset_registry.example.json");
+const ASSET_REGISTRY_PATH = process.env.LYTH_MCP_ASSET_REGISTRY || DEFAULT_ASSET_REGISTRY_PATH;
 const DEFAULT_BRIDGE_ROUTE_REGISTRY_PATH = resolve(PACKAGE_ROOT, "bridge_routes.example.json");
 const BRIDGE_ROUTE_REGISTRY_PATH = process.env.LYTH_MCP_BRIDGE_ROUTE_REGISTRY || DEFAULT_BRIDGE_ROUTE_REGISTRY_PATH;
 const RUNBOOK_REGISTRY_PATH = process.env.LYTH_MCP_RUNBOOK_REGISTRY || resolve(PACKAGE_ROOT, "runbooks");
@@ -802,6 +805,10 @@ function prepareWalletRequest(draft, from) {
 async function loadVendors() {
     return loadVendorRegistry(VENDOR_REGISTRY_PATH);
 }
+async function loadAssets() {
+    // TODO(mainnet): replace bundled example data with signed/on-chain asset registry reads once core/indexer exposes them.
+    return loadAssetRegistry(ASSET_REGISTRY_PATH);
+}
 async function loadBridgeRoutes() {
     return loadBridgeRegistry(BRIDGE_ROUTE_REGISTRY_PATH);
 }
@@ -824,6 +831,14 @@ async function quoteOrder(args) {
 async function evaluateVendorRisk(vendor, quote) {
     const policy = await getMerchantPolicy(vendor.id);
     return evaluateMerchantPolicy({ vendor, quote, policy });
+}
+async function evaluateAssetPolicy(symbol, useCase) {
+    const registry = await loadAssets();
+    const asset = getAsset(registry.registry, symbol);
+    return {
+        registry,
+        policy: evaluateAssetUseCase(asset, useCase),
+    };
 }
 function outboxMethod(kind) {
     return kind === "eth_raw" ? "eth_sendRawTransaction" : "lyth_submitEncrypted";
@@ -1108,6 +1123,25 @@ const bookingStatusEnum = z.enum(["requested", "provider_requested", "accepted_d
 const invoiceStatusEnum = z.enum(["open", "paid", "cancelled", "expired"]);
 const bridgeStatusEnum = z.enum(["active", "draft", "degraded", "paused"]);
 const bridgeRouteTypeEnum = z.enum(["ibc", "zk_light_client", "trusted", "issuer_native", "manual"]);
+const assetKindEnum = z.enum(["native", "private_native", "wrapped", "issuer_native", "mrc20", "nft", "vault"]);
+const assetStatusEnum = z.enum(["active", "draft", "deprecated", "blocked"]);
+const assetDenominationEnum = z.enum(["public", "private", "external"]);
+const assetUseCaseEnum = z.enum([
+    "transfer",
+    "commerce",
+    "service_payment",
+    "escrow",
+    "bridge",
+    "staking",
+    "contract",
+    "market",
+    "discovery",
+    "issuer_registration",
+    "private_transfer",
+    "private_burn",
+    "cross_to_private",
+    "view",
+]);
 const recordSchema = z.record(z.unknown()).optional();
 const policySchema = z.object({
     maxAmount: z.string().optional(),
@@ -1178,6 +1212,7 @@ server.tool("mcp_self_check", "Check MCP install, config, stores, and RPC reacha
             invoices: await invoiceStoreInfo(),
             merchantPolicies: await merchantPolicyStoreInfo(),
             vendorRegistry: VENDOR_REGISTRY_PATH,
+            assetRegistry: ASSET_REGISTRY_PATH,
             bridgeRouteRegistry: BRIDGE_ROUTE_REGISTRY_PATH,
             runbookRegistry: RUNBOOK_REGISTRY_PATH,
         },
@@ -2614,6 +2649,150 @@ server.tool("vendor_search", "Search the local vendor registry used by agent run
         vendors: searchVendors(registry.registry, { query, category, limit }),
     });
 });
+server.tool("asset_registry_info", "Show local asset registry metadata, hash, status classes, and denomination classes.", {}, async () => {
+    const registry = await loadAssets();
+    return text(assetRegistrySummary(registry));
+});
+server.tool("asset_search", "Search local asset metadata and wallet-readable risk labels.", {
+    query: z.string().optional(),
+    kind: assetKindEnum.optional(),
+    denomination: assetDenominationEnum.optional(),
+    status: assetStatusEnum.optional(),
+    useCase: assetUseCaseEnum.optional(),
+    limit: z.number().min(1).max(100).optional(),
+}, async ({ query, kind, denomination, status, useCase, limit }) => {
+    const registry = await loadAssets();
+    const assets = listAssets(registry.registry, {
+        query,
+        kind: kind,
+        denomination: denomination,
+        status: status,
+        useCase: useCase,
+        limit,
+    });
+    return text({
+        registry: assetRegistrySummary(registry),
+        assets: assets.map((asset) => ({
+            ...asset,
+            risk: assetRisk(asset),
+        })),
+        warning: "Bundled asset metadata is example planning data until signed/on-chain asset registry support is available.",
+    });
+});
+server.tool("asset_get", "Get one asset's metadata, risk labels, allowed use cases, and privacy/bridge warnings.", {
+    symbol: z.string().min(1),
+}, async ({ symbol }) => {
+    const registry = await loadAssets();
+    const asset = getAsset(registry.registry, symbol);
+    const bridgeRegistry = await loadBridgeRoutes();
+    const routes = asset.bridgeRouteIds?.length
+        ? asset.bridgeRouteIds.map((routeId) => {
+            try {
+                return getBridgeRoute(bridgeRegistry.registry, routeId);
+            }
+            catch {
+                return null;
+            }
+        }).filter((route) => route !== null)
+        : listBridgeRoutes(bridgeRegistry.registry, { asset: asset.symbol });
+    return text({
+        registry: assetRegistrySummary(registry),
+        asset,
+        risk: assetRisk(asset),
+        bridgeRoutes: routes,
+    });
+});
+server.tool("asset_risk_label", "Render wallet-readable risk labels for an asset and optional intended use case.", {
+    symbol: z.string().min(1),
+    useCase: assetUseCaseEnum.optional(),
+}, async ({ symbol, useCase }) => {
+    const registry = await loadAssets();
+    const asset = getAsset(registry.registry, symbol);
+    return text({
+        asset,
+        risk: assetRisk(asset),
+        policy: useCase ? evaluateAssetUseCase(asset, useCase) : undefined,
+    });
+});
+server.tool("asset_route_labels", "Show asset route labels by joining local asset metadata with bridge route metadata.", {
+    symbol: z.string().min(1),
+}, async ({ symbol }) => {
+    const assetRegistry = await loadAssets();
+    const bridgeRegistry = await loadBridgeRoutes();
+    const asset = getAsset(assetRegistry.registry, symbol);
+    const routes = asset.bridgeRouteIds?.length
+        ? asset.bridgeRouteIds.map((routeId) => {
+            try {
+                return getBridgeRoute(bridgeRegistry.registry, routeId);
+            }
+            catch {
+                return null;
+            }
+        }).filter((route) => route !== null)
+        : listBridgeRoutes(bridgeRegistry.registry, { asset: asset.symbol });
+    return text({
+        asset,
+        risk: assetRisk(asset),
+        routes,
+        labels: [
+            ...assetRisk(asset).labels,
+            ...routes.flatMap((route) => [route.routeType, route.status, ...(route.circuitBreaker?.paused ? ["circuit_breaker_paused"] : [])]),
+        ],
+        warning: "Route labels are local registry metadata, not proof that a bridge transaction can execute.",
+    });
+});
+server.tool("privacy_policy_check", "Check whether an asset/denomination can be used for a requested action. Private LYTH is blocked from productive/public actions.", {
+    symbol: z.string().min(1),
+    useCase: assetUseCaseEnum,
+}, async ({ symbol, useCase }) => {
+    const registry = await loadAssets();
+    const asset = getAsset(registry.registry, symbol);
+    const policy = evaluateAssetUseCase(asset, useCase);
+    return policy.ok ? text(policy) : errorJson(policy);
+});
+server.tool("private_denomination_warning", "Explain public/private LYTH separation, one-way privacy crossing, and blocked productive use cases.", {
+    symbol: z.string().optional().describe("Optional asset symbol. Defaults to pLYTH if present."),
+}, async ({ symbol }) => {
+    const registry = await loadAssets();
+    let asset = null;
+    try {
+        asset = getAsset(registry.registry, symbol ?? "pLYTH");
+    }
+    catch {
+        asset = null;
+    }
+    return text({
+        registry: assetRegistrySummary(registry),
+        asset,
+        warning: privateDenominationWarning(asset ?? undefined),
+    });
+});
+server.tool("contract_path_guidance", "Explain Monolythium's no-EVM contract path for Solidity/EVM/Rust/RISC-V requests.", {
+    language: z.string().optional().describe("Example: Solidity, Rust, C, Move."),
+    artifactType: z.string().optional().describe("Example: EVM bytecode, MRV package, WASM."),
+}, async ({ language, artifactType }) => {
+    const raw = `${language ?? ""} ${artifactType ?? ""}`.toLowerCase();
+    const asksEvm = raw.includes("solidity") || raw.includes("evm") || raw.includes("revm") || raw.includes("bytecode");
+    const asksRust = raw.includes("rust") || raw.includes("risc") || raw.includes("mrv");
+    return text({
+        supported: asksEvm ? false : asksRust ? "draft_tooling_pending" : "unknown_until_artifact_is_identified",
+        requested: { language, artifactType },
+        executionModel: "Rust/RISC-V native smart contracts; Solidity/EVM bytecode is not a first-class deployment path.",
+        answer: asksEvm
+            ? "Solidity/EVM bytecode is not supported by this MCP path. Use the Rust/RISC-V MRV contract path once contract package/deploy tools are wired."
+            : asksRust
+                ? "Rust/RISC-V is the intended contract path, but deploy/call builders are still TODO until core exposes the contract module surface."
+                : "Identify the artifact format first. The supported direction is Rust/RISC-V MRV, not EVM bytecode.",
+        todo: [
+            "TODO(contract-tooling): add contract_build_mrv, contract_validate_mrv, contract_deploy_draft, contract_call_draft, contract_query, and contract_events when core exposes them.",
+            "TODO(docs): link this guidance to the public no-EVM/Rust-RISC-V developer docs.",
+        ],
+        alternatives: [
+            "Use native MRC standards/modules for tokens, NFTs, vaults, and markets where possible.",
+            "Use Rust/RISC-V contracts for custom programmable logic when the contract module is available.",
+        ],
+    });
+});
 server.tool("bridge_routes", "List configured bridge/liquidity routes with status, cooldown, and trust model metadata.", {
     asset: z.string().optional(),
     sourceChain: z.string().optional(),
@@ -2656,6 +2835,15 @@ server.tool("bridge_quote", "Preflight a bridge amount against route status, coo
     destinationChain: z.string().optional(),
 }, async ({ amount, asset, routeId, sourceChain, destinationChain }) => {
     const registry = await loadBridgeRoutes();
+    const assetPolicy = await evaluateAssetPolicy(asset, "bridge");
+    if (!assetPolicy.policy.ok) {
+        return errorJson({
+            ok: false,
+            assetPolicy: assetPolicy.policy,
+            assetRegistry: assetRegistrySummary(assetPolicy.registry),
+            refusal: "Bridge quote refused by local asset/privacy policy.",
+        });
+    }
     const route = routeId
         ? getBridgeRoute(registry.registry, routeId)
         : selectBridgeRoute(registry.registry, { asset, sourceChain, destinationChain });
@@ -2672,8 +2860,8 @@ server.tool("bridge_quote", "Preflight a bridge amount against route status, coo
         epochHours: registry.registry.epochHours,
     });
     return quote.executable
-        ? text({ registry: bridgeRegistrySummary(registry), quote })
-        : errorJson({ registry: bridgeRegistrySummary(registry), quote });
+        ? text({ registry: bridgeRegistrySummary(registry), assetPolicy: assetPolicy.policy, quote })
+        : errorJson({ registry: bridgeRegistrySummary(registry), assetPolicy: assetPolicy.policy, quote });
 });
 server.tool("bridge_cooldown_matrix", "Show the configured cooldown matrix for IBC, zk-light-client, Bitcoin, Solana, Ethereum, and trusted routes.", {
     asset: z.string().optional(),
@@ -2924,10 +3112,12 @@ server.tool("order_quote", "Quote a demo vendor catalog item. This does not crea
 }, async ({ vendorId, itemId, quantity, asset, fulfillmentFields }) => {
     const { registry, vendor, quote } = await quoteOrder({ vendorId, itemId, quantity, asset, fulfillmentFields });
     const merchantRisk = await evaluateVendorRisk(vendor, quote);
+    const assetPolicy = await evaluateAssetPolicy(quote.asset, "commerce");
     return text({
         registry: vendorRegistrySummary(registry),
         quote,
         merchantRisk,
+        assetPolicy: assetPolicy.policy,
         warning: "Quote only. No payment has been prepared and no vendor has been contacted.",
     });
 });
@@ -2941,6 +3131,15 @@ server.tool("order_create", "Create a local demo order from the vendor registry.
 }, async ({ vendorId, itemId, quantity, asset, fulfillmentFields, notes }) => {
     const { registry, vendor, quote } = await quoteOrder({ vendorId, itemId, quantity, asset, fulfillmentFields });
     const merchantRisk = await evaluateVendorRisk(vendor, quote);
+    const assetPolicy = await evaluateAssetPolicy(quote.asset, "commerce");
+    if (!assetPolicy.policy.ok) {
+        return errorJson({
+            ok: false,
+            quote,
+            assetPolicy: assetPolicy.policy,
+            refusal: "Order creation refused by local asset/privacy policy.",
+        });
+    }
     if (!merchantRisk.ok) {
         return errorJson({
             ok: false,
@@ -2962,7 +3161,7 @@ server.tool("order_create", "Create a local demo order from the vendor registry.
         asset: quote.asset,
         registryHash: quote.registryHash,
         fulfillmentFields,
-        quote: { ...quote, merchantRisk, notes },
+        quote: { ...quote, merchantRisk, assetPolicy: assetPolicy.policy, notes },
     });
     const receipt = await addReceipt({
         kind: "order_create",
@@ -2980,6 +3179,7 @@ server.tool("order_create", "Create a local demo order from the vendor registry.
         registry: vendorRegistrySummary(registry),
         order,
         merchantRisk,
+        assetPolicy: assetPolicy.policy,
         receipt,
         warning: "Local order only. No real vendor was contacted and no payment was sent.",
     });
@@ -3002,6 +3202,15 @@ server.tool("order_pay", "Prepare a pay_vendor runbook and optional wallet reque
         amount: order.amount,
         asset: order.asset,
     });
+    const assetPolicy = await evaluateAssetPolicy(order.asset, "commerce");
+    if (!assetPolicy.policy.ok) {
+        return errorJson({
+            ok: false,
+            order,
+            assetPolicy: assetPolicy.policy,
+            refusal: "Payment preparation refused by local asset/privacy policy.",
+        });
+    }
     if (!merchantRisk.ok) {
         return errorJson({
             ok: false,
@@ -3056,6 +3265,7 @@ server.tool("order_pay", "Prepare a pay_vendor runbook and optional wallet reque
     return text({
         order: updated,
         merchantRisk,
+        assetPolicy: assetPolicy.policy,
         draft,
         prepared,
         receipt,
@@ -3354,6 +3564,15 @@ server.tool("booking_request_create", "Create a local service-booking request an
     const finalAmount = amount ?? quote?.amount ?? "0";
     const finalAsset = String(asset ?? quote?.asset ?? vendor.acceptedAssets?.[0] ?? "LYTH").toUpperCase();
     decimalToUnits(finalAmount);
+    const assetPolicy = await evaluateAssetPolicy(finalAsset, "service_payment");
+    if (!assetPolicy.policy.ok) {
+        return errorJson({
+            ok: false,
+            assetPolicy: assetPolicy.policy,
+            quote,
+            refusal: "Booking creation refused by local asset/privacy policy.",
+        });
+    }
     const finalService = service ?? quote?.itemName ?? itemId ?? vendor.serviceTags?.[0];
     if (!finalService) {
         return errorText("service or itemId is required for a booking request");
@@ -3408,6 +3627,7 @@ server.tool("booking_request_create", "Create a local service-booking request an
         bookingFields,
         quote: quote ?? { amount: finalAmount, asset: finalAsset, service: finalService },
         merchantRisk,
+        assetPolicy: assetPolicy.policy,
         runbookId: draft.id,
     });
     const receipt = await addReceipt({
@@ -3426,6 +3646,7 @@ server.tool("booking_request_create", "Create a local service-booking request an
         registry: vendorRegistrySummary(registry),
         booking,
         merchantRisk,
+        assetPolicy: assetPolicy.policy,
         draft,
         receipt,
         warning: "Local booking request only. No real provider was contacted.",

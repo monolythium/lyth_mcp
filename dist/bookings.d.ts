@@ -24,6 +24,7 @@ export interface BookingRecord {
     bookingFields?: Record<string, unknown>;
     quote?: unknown;
     merchantRisk?: unknown;
+    assetPolicy?: unknown;
     runbookId?: string;
     escrow?: {
         runbookId?: string;

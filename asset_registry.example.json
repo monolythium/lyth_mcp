@@ -1,0 +1,161 @@
+{
+  "schemaVersion": 1,
+  "network": "testnet-69420",
+  "issuer": "Monolythium MCP example registry",
+  "updatedAt": "2026-05-17T00:00:00.000Z",
+  "disclaimer": "Example asset metadata for MCP planning. TODO(mainnet): replace with signed/on-chain asset registry once core/indexer exposes it.",
+  "assets": [
+    {
+      "symbol": "LYTH",
+      "name": "Monolythium",
+      "kind": "native",
+      "status": "active",
+      "denomination": "public",
+      "decimals": 18,
+      "canonical": true,
+      "allowedUseCases": [
+        "transfer",
+        "commerce",
+        "service_payment",
+        "escrow",
+        "bridge",
+        "staking",
+        "contract",
+        "market",
+        "discovery",
+        "issuer_registration",
+        "view"
+      ],
+      "riskLabels": ["native_asset", "public_balance"],
+      "walletWarnings": [],
+      "notes": ["Public LYTH is the productive native denomination."]
+    },
+    {
+      "symbol": "pLYTH",
+      "name": "Private Monolythium",
+      "kind": "private_native",
+      "status": "active",
+      "denomination": "private",
+      "decimals": 18,
+      "canonical": true,
+      "allowedUseCases": ["private_transfer", "private_burn", "cross_to_private", "view"],
+      "blockedUseCases": [
+        "commerce",
+        "service_payment",
+        "escrow",
+        "bridge",
+        "staking",
+        "contract",
+        "market",
+        "discovery",
+        "issuer_registration"
+      ],
+      "riskLabels": ["privacy_cordon", "non_productive_balance", "one_way_privacy"],
+      "complianceNotes": [
+        "Private LYTH and public LYTH are separate denominations and must not be combined in spendable-balance displays.",
+        "Private LYTH is intentionally blocked from commerce, bridges, staking, contracts, markets, discovery, issuer registration, escrow, and service payments.",
+        "TODO(mainnet): replace example warning text with the final legal/compliance language from the signed asset registry."
+      ],
+      "walletWarnings": [
+        "Do not route private-denominated LYTH into public economic actions.",
+        "Exchanges and frontends may reject privacy-denominated funds."
+      ]
+    },
+    {
+      "symbol": "mUSDC",
+      "name": "Mono Wrapped USDC",
+      "kind": "wrapped",
+      "status": "draft",
+      "denomination": "public",
+      "decimals": 6,
+      "issuer": "Bridge route",
+      "bridgeRouteIds": ["eth-usdc-to-mono-zk", "cosmos-usdc-to-mono-ibc", "sol-usdc-to-mono-zk", "trusted-usdc-transitional"],
+      "allowedUseCases": ["transfer", "commerce", "service_payment", "escrow", "bridge", "market", "view"],
+      "riskLabels": ["wrapped_asset", "bridge_dependency", "issuer_dependency", "draft_route"],
+      "walletWarnings": [
+        "Wrapped USDC inherits bridge-route risk and cooldowns.",
+        "TODO(mainnet): show live issuer/native support status before wallet approval."
+      ],
+      "liquidityVenues": ["Mono native spot markets"]
+    },
+    {
+      "symbol": "USDC",
+      "name": "USD Coin",
+      "kind": "issuer_native",
+      "status": "draft",
+      "denomination": "external",
+      "decimals": 6,
+      "issuer": "Circle or supported issuer",
+      "allowedUseCases": ["transfer", "commerce", "service_payment", "escrow", "bridge", "market", "view"],
+      "riskLabels": ["issuer_supported", "external_asset", "draft_support"],
+      "walletWarnings": [
+        "Native issuer support is not active in this example registry.",
+        "Until issuer-native support is active, use the wrapped route metadata and show bridge risk."
+      ],
+      "notes": ["TODO(mainnet): bind this record to official issuer support and on-chain asset metadata."]
+    },
+    {
+      "symbol": "mBTC",
+      "name": "Mono Wrapped Bitcoin",
+      "kind": "wrapped",
+      "status": "draft",
+      "denomination": "public",
+      "decimals": 8,
+      "issuer": "Bridge route",
+      "bridgeRouteIds": ["btc-to-mono-zk"],
+      "allowedUseCases": ["transfer", "commerce", "service_payment", "escrow", "bridge", "market", "view"],
+      "riskLabels": ["wrapped_asset", "bridge_dependency", "bitcoin_finality_buffer", "draft_route"],
+      "walletWarnings": ["Wrapped BTC inherits Bitcoin finality assumptions and route drain caps."]
+    },
+    {
+      "symbol": "BTC",
+      "name": "Bitcoin",
+      "kind": "issuer_native",
+      "status": "draft",
+      "denomination": "external",
+      "decimals": 8,
+      "issuer": "Bitcoin source chain",
+      "bridgeRouteIds": ["btc-to-mono-zk"],
+      "allowedUseCases": ["transfer", "bridge", "market", "view"],
+      "riskLabels": ["external_asset", "bitcoin_finality_buffer", "draft_support"],
+      "walletWarnings": ["BTC enters Mono through bridge route metadata; it is not native Mono execution-layer balance."]
+    },
+    {
+      "symbol": "ETH",
+      "name": "Ether",
+      "kind": "issuer_native",
+      "status": "draft",
+      "denomination": "external",
+      "decimals": 18,
+      "issuer": "Ethereum source chain",
+      "allowedUseCases": ["transfer", "bridge", "market", "view"],
+      "riskLabels": ["external_asset", "draft_support"],
+      "walletWarnings": ["TODO(mainnet): add ETH bridge route metadata before treating ETH onboarding as available."]
+    },
+    {
+      "symbol": "mETH",
+      "name": "Mono Wrapped Ether",
+      "kind": "wrapped",
+      "status": "draft",
+      "denomination": "public",
+      "decimals": 18,
+      "issuer": "Bridge route",
+      "bridgeRouteIds": [],
+      "allowedUseCases": ["transfer", "commerce", "service_payment", "escrow", "bridge", "market", "view"],
+      "riskLabels": ["wrapped_asset", "bridge_dependency", "draft_route"],
+      "walletWarnings": ["TODO(mainnet): add an Ethereum ETH route before treating mETH as available."]
+    },
+    {
+      "symbol": "DEMO",
+      "name": "Demo MRC-20 Token",
+      "kind": "mrc20",
+      "status": "draft",
+      "denomination": "public",
+      "decimals": 18,
+      "mrcStandard": "MRC-20",
+      "allowedUseCases": ["transfer", "commerce", "service_payment", "escrow", "market", "view"],
+      "riskLabels": ["demo_asset", "mrc20_draft"],
+      "walletWarnings": ["Demo token only. TODO(mainnet): replace with live MRC-20 metadata and conformance status."]
+    }
+  ]
+}

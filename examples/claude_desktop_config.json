@@ -17,6 +17,7 @@
         "LYTH_MCP_BOOKING_STORE": "/absolute/path/to/.lyth_mcp/bookings.json",
         "LYTH_MCP_INVOICE_STORE": "/absolute/path/to/.lyth_mcp/invoices.json",
         "LYTH_MCP_MERCHANT_POLICY_STORE": "/absolute/path/to/.lyth_mcp/merchant_policies.json",
+        "LYTH_MCP_ASSET_REGISTRY": "/absolute/path/to/lyth_mcp/asset_registry.example.json",
         "LYTH_MCP_BRIDGE_ROUTE_REGISTRY": "/absolute/path/to/lyth_mcp/bridge_routes.example.json",
         "LYTH_MCP_VENDOR_REGISTRY": "/absolute/path/to/lyth_mcp/vendors.example.json"
       }

@@ -270,7 +270,7 @@ Whitepaper refs: §17, §18, §22.4-§22.8, §24, §99.6.
 - [ ] **CORE SDK** AMM tools if AMMs are admitted.
   - `pool_get`, `swap_quote`, `swap_draft`, `liquidity_add_draft`, `liquidity_remove_draft`.
   - Include explicit audit/risk posture.
-- [ ] **MCP** Asset registry and route labels.
+- [x] **MCP** Asset registry and route labels.
   - Native asset, wrapped asset, issuer-supported asset, bridge route, privacy-denomination status.
   - Wallet-readable risk labels for every asset.
 - [ ] **INDEXER** Event/receipt decoding for MRC and market events.
@@ -318,10 +318,10 @@ Whitepaper refs: §13, §25, §99 Legal Disclaimer.
 - [ ] **CORE SDK** Privacy transfer helpers.
   - `private_transfer_draft`, `private_burn_draft`, `cross_to_private_draft`.
   - No `cross_to_public` path exists.
-- [ ] **MCP** Privacy-denomination policy guard.
+- [x] **MCP** Privacy-denomination policy guard.
   - Refuse to use private LYTH for contracts, spot CLOB, bridge, staking, discovery, issuer registration, escrow, or service payments.
   - Return `PrivacyDenominationViolation` explanation.
-- [ ] **MCP** Compliance warnings for private denomination.
+- [x] **MCP** Compliance warnings for private denomination.
   - Explain one-way crossing, exchange rejection risk, KYC/front-end policy risk, and no productive chain use.
 - [ ] **WALLET MCP** Proof-of-crossing helper if supported by application layer.
   - Draft/export optional proof for exchanges/frontends.
@@ -350,7 +350,7 @@ Whitepaper refs: §17, §22, §27.2, §99.8.
   - "Show storage/events/receipt."
 - [ ] **SDK MCP** MRC conformance runner.
   - Validate MRC-20/MRC-721/MRC-1155/MRC-4626 implementation behavior.
-- [ ] **MCP** No-EVM clarity.
+- [x] **MCP** No-EVM clarity.
   - Explicitly say Solidity/EVM bytecode is not supported when users ask to deploy Solidity.
   - Link to Rust/RISC-V path and any future compatibility layer status.
 
@@ -461,7 +461,8 @@ Whitepaper refs: §18, §22, §24.2, §26, §27, §29.5, §99.8.
 
 - [ ] **MCP** No-EVM readiness.
   - RISC-V VM and MRC SDK surfaces available.
-  - MCP no longer depends on EVM transaction assumptions except transitional LYTH transfer compatibility.
+  - `contract_path_guidance` gives explicit no-EVM/Solidity guidance now.
+  - MCP still depends on transitional LYTH transfer compatibility until native wallet/contract builders are exposed.
 - [ ] **MCP** MRC readiness.
   - Token/NFT/vault/market helpers work through native modules.
 - [ ] **MCP** Agent-commerce readiness.
@@ -476,7 +477,8 @@ Whitepaper refs: §18, §22, §24.2, §26, §27, §29.5, §99.8.
 - [ ] **MCP** Runbook readiness.
   - Canonical signed/hash-verified runbooks with monitoring and receipts.
 - [ ] **MCP** Security readiness.
-  - Self-check, health scoring, outbox, receipts, recovery, emergency state, policy simulation, privacy guardrails.
+  - Self-check, health scoring, outbox, receipts, and privacy guardrails are implemented.
+  - Recovery, emergency state, and full policy simulation remain.
 - [ ] **MCP** Documentation readiness.
   - User README, operator README, developer README, connector guide, security model, production deployment guide.
 - [ ] **MCP** Test readiness.

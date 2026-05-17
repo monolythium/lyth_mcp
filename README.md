@@ -146,6 +146,7 @@ examples/claude_desktop_config.json
 | `LYTH_MCP_TIMEOUT_MS` | `10000` | Per-request timeout |
 | `LYTH_MCP_MAX_OUTPUT` | `16000` | MCP response truncation limit |
 | `LYTH_MCP_VENDOR_REGISTRY` | bundled `vendors.example.json` | Optional path override for local vendor registry JSON |
+| `LYTH_MCP_ASSET_REGISTRY` | bundled `asset_registry.example.json` | Optional path override for local asset/risk metadata |
 | `LYTH_MCP_BRIDGE_ROUTE_REGISTRY` | bundled `bridge_routes.example.json` | Optional path override for local bridge/liquidity route metadata |
 | `LYTH_MCP_ENABLE_SUBMIT` | `0` | Set to `1` to allow broadcasting already-signed payloads |
 | `LYTH_MCP_WALLET_STORE` | `~/.lyth_mcp/wallets.json` | Local encrypted wallet store path |
@@ -204,6 +205,14 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `validate_runbook` | Check a runbook against spending policy and safety rules |
 | `prepare_wallet_request` | Prepare a wallet approval payload where supported |
 | `vendor_search` | Search a local vendor registry JSON |
+| `asset_registry_info` | Show local asset registry metadata and content hash |
+| `asset_search` | Search asset metadata and risk labels |
+| `asset_get` | Get one asset, risk labels, warnings, and bridge routes |
+| `asset_risk_label` | Render wallet-readable labels for an asset/use case |
+| `asset_route_labels` | Join local asset labels with bridge route labels |
+| `privacy_policy_check` | Refuse blocked private-denomination use cases |
+| `private_denomination_warning` | Explain public/private LYTH separation and compliance warnings |
+| `contract_path_guidance` | Explain no-EVM/Solidity guidance and Rust/RISC-V path |
 | `bridge_routes` | List bridge/liquidity routes with status, cooldown, and trust metadata |
 | `bridge_route_get` | Get one bridge route's risk/cooldown/circuit-breaker metadata |
 | `bridge_quote` | Preflight a bridge amount against route status, fees, caps, cooldown, and risk |
@@ -308,6 +317,24 @@ runbooks/
 The MCP exposes those files through a local canonical registry. `runbook_list` returns stable `sha256:` content hashes, and `runbook_verify` can compare a runbook against an expected hash. This is a release-local integrity layer; the future target is signed SDK/protocol registry metadata.
 
 `draft_runbook`, `validate_runbook`, and `prepare_wallet_request` attach canonical metadata when a bundled runbook exists. Drafts include the runbook id, version, content hash, required fields, optional fields, and missing required fields. Validation fails if a canonical required field is absent.
+
+## Asset Registry And Privacy Guardrails
+
+By default, the MCP loads `asset_registry.example.json`. This is local planning metadata with explicit `TODO(mainnet)` notes; it is not a replacement for signed/on-chain asset metadata.
+
+The asset registry labels:
+
+- native public LYTH;
+- private-denominated LYTH;
+- wrapped bridge assets such as `mUSDC` and `mBTC`;
+- issuer-native draft assets such as `USDC`;
+- demo MRC assets.
+
+`asset_risk_label` and `asset_route_labels` are wallet-facing helpers. They return labels such as `native_asset`, `wrapped_asset`, `bridge_dependency`, `issuer_supported`, and `privacy_cordon`.
+
+`privacy_policy_check` enforces the private-denomination cordon. Known private assets, such as `pLYTH`, are refused for commerce, service payments, escrow, bridges, staking, contracts, markets, discovery, and issuer registration. The same local policy is enforced by order creation, order payment preparation, booking creation, and bridge quotes.
+
+Use `contract_path_guidance` when a user asks to deploy Solidity or EVM bytecode. It returns the explicit no-EVM answer and points to the future Rust/RISC-V MRV contract path.
 
 ## Bridge Route Registry
 
@@ -729,6 +756,7 @@ Before treating this as a public product, the next pieces should be added:
 - wallet extension handoff for approval requests;
 - mono1-to-0x address resolution through the SDK;
 - MRC token payment builders;
+- signed/on-chain asset registry and privacy event metadata;
 - on-chain or signed vendor registry with verified fulfillment connectors;
 - escrow module integration;
 - spot-market order transaction builder;
