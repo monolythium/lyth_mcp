@@ -523,6 +523,57 @@ assert(badVerify.valid === false && /mismatch/.test(badVerify.reason), "bad NOWP
 
 await evmWallet.deleteEvmWallet("smoke-evm", "smoke-evm");
 
+// ---------------------------------------------------------------------------
+// P15 — Secure traveler profiles. Encryption, redaction, reveal round-trip.
+// ---------------------------------------------------------------------------
+process.env.LYTH_MCP_PROFILE_STORE = join(temp, "profiles.json");
+process.env.LYTH_MCP_PROFILE_KEY = join(temp, "profiles.key");
+const profiles = await import("../dist/profiles.js");
+
+const profileInput = {
+  legalFirstName: "Smoke",
+  legalLastName: "Tester",
+  dateOfBirth: "1990-01-15",
+  nationality: "CA",
+  contact: { email: "smoke@example.com", phone: "+15555550101" },
+  ticketDeliveryEmail: "tickets@example.com",
+  passports: [{ number: "AB1234567", countryOfIssue: "CA", expiresOn: "2030-06-01" }],
+  frequentFlyerNumbers: [{ airline: "AC", number: "AC123" }],
+};
+const profileSummary = await profiles.createProfile({
+  id: "smoke-profile",
+  displayName: "Smoke Traveler",
+  profile: profileInput,
+  allowLocalKey: true,
+});
+assert(profileSummary.redacted.legalName.startsWith("Smoke T"), "redacted legal name must mask the last name");
+assert(profileSummary.redacted.contact.email.includes("•"), "redacted email must be masked");
+assert(profileSummary.redacted.passports?.[0]?.last4 === "4567", "passport last4 must be exposed in redacted preview");
+assert(!JSON.stringify(profileSummary).includes("AB1234567"), "redacted profile must never contain raw passport number");
+
+const revealed = await profiles.revealProfile("smoke-profile");
+assert(revealed.passports?.[0]?.number === "AB1234567", "reveal must return the raw passport number");
+assert(revealed.ticketDeliveryEmail === "tickets@example.com", "reveal must preserve ticketDeliveryEmail");
+
+const customer = profiles.customerFieldsFromProfile(revealed);
+assert(customer.firstName === "Smoke" && customer.lastName === "Tester", "customer mapping must use legal name when preferredName is absent");
+assert(customer.email === "tickets@example.com", "customer email must prefer ticketDeliveryEmail over contact.email");
+
+const patched = await profiles.updateProfile({
+  id: "smoke-profile",
+  patch: { preferredName: "Smokey" },
+});
+const revealedPatched = await profiles.revealProfile("smoke-profile");
+assert(revealedPatched.preferredName === "Smokey", "update must persist preferredName");
+assert(revealedPatched.passports?.[0]?.number === "AB1234567", "update must preserve untouched fields");
+
+const customer2 = profiles.customerFieldsFromProfile(revealedPatched);
+assert(customer2.firstName === "Smokey", "customer firstName must prefer preferredName when present");
+
+await profiles.deleteProfile("smoke-profile", "smoke-profile");
+const after = await profiles.listProfiles();
+assert(after.find((p) => p.id === "smoke-profile") === undefined, "delete must remove the profile");
+
 console.log(JSON.stringify({
   ok: true,
   temp,
@@ -551,6 +602,8 @@ console.log(JSON.stringify({
   x402PolicyCount: policies.length,
   nowpaymentsIpnVerifyOk: goodVerify.valid === true,
   nowpaymentsIpnRejectOk: badVerify.valid === false,
+  profileRedactionOk: profileSummary.redacted.passports?.[0]?.last4 === "4567",
+  profileCustomerMappingOk: customer2.firstName === "Smokey" && customer2.email === "tickets@example.com",
 }, null, 2));
 
 async function startMockRpc() {

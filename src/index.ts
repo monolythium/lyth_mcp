@@ -255,6 +255,17 @@ import {
   writeAgentIdentity,
 } from "./x402_store.js";
 import {
+  createProfile,
+  customerFieldsFromProfile,
+  deleteProfile,
+  getProfile,
+  listProfiles,
+  profileStoreInfo,
+  revealProfile,
+  updateProfile,
+  type ProfilePlaintext,
+} from "./profiles.js";
+import {
   travalaBookPay,
   travalaBookStatus,
   travalaMcpUrl,
@@ -1811,6 +1822,13 @@ const MCP_TOOL_NAMES = [
   "travala_book_recover",
   "coinsbee_guide",
   "coinsbee_via_nowpayments_track",
+  "profile_create",
+  "profile_update",
+  "profile_list",
+  "profile_get",
+  "profile_reveal",
+  "profile_delete",
+  "profile_store_info",
   "vendor_search",
   "provider_onboarding_draft",
   "order_create",
@@ -3683,6 +3701,166 @@ server.tool(
 );
 
 // ---------------------------------------------------------------------------
+// Secure traveler profiles (P15) — encrypted PII storage. Profiles supply
+// firstName / lastName / email / phone to vendor bookings without the agent
+// re-typing them, and surface passport / frequent-flyer data only on explicit
+// reveal. Same encryption model as wallets (AES-256-GCM + scrypt).
+// ---------------------------------------------------------------------------
+
+const ProfilePassportSchema = z.object({
+  number: z.string().min(3),
+  countryOfIssue: z.string().min(2),
+  expiresOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  issuedOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  fullNameOnPassport: z.string().optional(),
+});
+
+const ProfileFrequentFlyerSchema = z.object({
+  airline: z.string().min(1),
+  number: z.string().min(1),
+});
+
+const ProfilePlaintextSchema = z.object({
+  legalFirstName: z.string().min(1),
+  legalMiddleName: z.string().optional(),
+  legalLastName: z.string().min(1),
+  preferredName: z.string().optional(),
+  dateOfBirth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  nationality: z.string().optional(),
+  gender: z.string().optional(),
+  passports: z.array(ProfilePassportSchema).optional(),
+  knownTravelerNumbers: z.object({
+    tsaPrecheck: z.string().optional(),
+    globalEntry: z.string().optional(),
+    nexus: z.string().optional(),
+    other: z.record(z.string(), z.string()).optional(),
+  }).optional(),
+  frequentFlyerNumbers: z.array(ProfileFrequentFlyerSchema).optional(),
+  contact: z.object({
+    email: z.string().email(),
+    phone: z.string().min(3),
+    alternateEmail: z.string().email().optional(),
+  }),
+  ticketDeliveryEmail: z.string().email().optional(),
+  mailingAddress: z.object({
+    street: z.string().min(1),
+    city: z.string().min(1),
+    region: z.string().optional(),
+    postalCode: z.string().optional(),
+    country: z.string().min(1),
+  }).optional(),
+  emergencyContact: z.object({
+    name: z.string().min(1),
+    phone: z.string().min(3),
+    relationship: z.string().optional(),
+    email: z.string().email().optional(),
+  }).optional(),
+  dietaryPreferences: z.string().optional(),
+  accessibilityNeeds: z.string().optional(),
+  notes: z.string().optional(),
+});
+
+server.tool(
+  "profile_create",
+  "Create an encrypted traveler profile (legal name, DOB, passport, contact, ticket delivery email, frequent-flyer numbers). PII is encrypted at rest with AES-256-GCM + scrypt; only a redacted preview is visible to list/get.",
+  {
+    id: z.string().min(1).describe("Slug, e.g. 'nayiem' or 'family-travel'."),
+    displayName: z.string().min(1).describe("Friendly label shown without revealing PII."),
+    profile: ProfilePlaintextSchema,
+    passphrase: z.string().optional(),
+    allowLocalKey: z.boolean().optional().describe("Allow local-machine-key protection (no passphrase). Default false; passphrase is recommended."),
+    overwrite: z.boolean().optional(),
+    confirm: z.literal("CREATE_TRAVELER_PROFILE"),
+  },
+  async ({ id, displayName, profile, passphrase, allowLocalKey, overwrite }) => {
+    const summary = await createProfile({
+      id,
+      displayName,
+      profile: profile as ProfilePlaintext,
+      passphrase,
+      allowLocalKey,
+      overwrite,
+    });
+    return text({
+      profile: summary,
+      warning: "Profile contains PII (passport, DOB, contact). Reveal requires explicit confirmation. Treat the passphrase as a secret.",
+    });
+  },
+);
+
+server.tool(
+  "profile_update",
+  "Patch an existing traveler profile. Only the fields you supply are changed; the rest are preserved.",
+  {
+    id: z.string().min(1),
+    displayName: z.string().optional(),
+    patch: ProfilePlaintextSchema.partial(),
+    passphrase: z.string().optional(),
+    confirm: z.literal("UPDATE_TRAVELER_PROFILE"),
+  },
+  async ({ id, displayName, patch, passphrase }) => {
+    const summary = await updateProfile({
+      id,
+      displayName,
+      patch: patch as Partial<ProfilePlaintext>,
+      passphrase,
+    });
+    return text({ profile: summary });
+  },
+);
+
+server.tool(
+  "profile_list",
+  "List saved traveler profiles. Returns redacted previews only (no plaintext PII).",
+  {},
+  async () => text({ profiles: await listProfiles() }),
+);
+
+server.tool(
+  "profile_get",
+  "Get one traveler profile by id. Returns redacted preview only — call profile_reveal for plaintext.",
+  { id: z.string().min(1) },
+  async ({ id }) => text({ profile: await getProfile(id) }),
+);
+
+server.tool(
+  "profile_reveal",
+  "Reveal the full plaintext of an encrypted traveler profile. Requires explicit confirmation; do not paste output into shared contexts.",
+  {
+    id: z.string().min(1),
+    confirm: z.literal("REVEAL_TRAVELER_PROFILE"),
+    passphrase: z.string().optional(),
+  },
+  async ({ id, passphrase }) => {
+    const profile = await revealProfile(id, passphrase);
+    return text({
+      profileId: id,
+      profile,
+      warning:
+        "This response contains plaintext PII (passport, DOB, contact). Treat as a secret. Do not paste into chat history or commit it.",
+    });
+  },
+);
+
+server.tool(
+  "profile_delete",
+  "Delete a traveler profile after explicit confirmation.",
+  {
+    id: z.string().min(1),
+    confirmId: z.string().min(1).describe("Must exactly equal id."),
+    confirm: z.literal("DELETE_TRAVELER_PROFILE"),
+  },
+  async ({ id, confirmId }) => text(await deleteProfile(id, confirmId)),
+);
+
+server.tool(
+  "profile_store_info",
+  "Show profile store path, count, and file mode for diagnostics.",
+  {},
+  async () => text(await profileStoreInfo()),
+);
+
+// ---------------------------------------------------------------------------
 // Travala (P14.5) — pay-side wrappers around Travala's hosted MCP server.
 // lyth_mcp does not own catalog/search; install Travala's MCP separately for
 // travala_search_hotel / travala_search_package. lyth_mcp owns the wallet,
@@ -3726,23 +3904,25 @@ server.tool(
 
 server.tool(
   "travala_book_pay",
-  "Book a Travala package and pay the x402 invoice with the configured Base USDC wallet. Reuses the x402 vendor policy 'travala' and the locally configured ERC-8004 agentId / rewardWallet for cbBTC attribution.",
+  "Book a Travala package and pay the x402 invoice with the configured Base USDC wallet. Customer fields can be supplied directly or pulled from a saved secure profile (profileId). Reuses the x402 vendor policy 'travala' and the locally configured ERC-8004 agentId / rewardWallet for cbBTC attribution.",
   {
     packageId: z.string().min(1),
     sessionId: z.string().min(1),
+    profileId: z.string().optional().describe("Saved traveler profile id. Pulls firstName/lastName/email/phone from the encrypted profile. Either profileId or customer must be set."),
     customer: z.object({
       firstName: z.string().min(1),
       lastName: z.string().min(1),
       email: z.string().email(),
       phone: z.string().min(3),
-    }),
+    }).optional(),
     vendorPolicyId: z.string().optional().describe("x402 vendor policy id. Default 'travala'."),
     passphrase: z.string().optional(),
+    profilePassphrase: z.string().optional().describe("If the profile is passphrase-protected, supply it here."),
     dryRun: z.boolean().optional(),
     rewardWalletOverride: z.string().optional().describe("Override the locally configured rewardWallet for this booking only."),
     agentIdOverride: z.string().optional(),
   },
-  async ({ packageId, sessionId, customer, vendorPolicyId, passphrase, dryRun, rewardWalletOverride, agentIdOverride }) => {
+  async ({ packageId, sessionId, profileId, customer, vendorPolicyId, passphrase, profilePassphrase, dryRun, rewardWalletOverride, agentIdOverride }) => {
     const policy = await getX402Policy(vendorPolicyId ?? "travala");
     const wallet = await getEvmWallet(policy.walletName);
     const identity = await readAgentIdentity();
@@ -3751,10 +3931,21 @@ server.tool(
     if (rewardWallet && !isEvmAddress(rewardWallet)) {
       return errorText(`invalid rewardWallet: ${rewardWallet}`);
     }
+    let resolvedCustomer = customer;
+    let profileUsed: string | undefined;
+    if (profileId) {
+      const profile = await revealProfile(profileId, profilePassphrase);
+      const fromProfile = customerFieldsFromProfile(profile);
+      resolvedCustomer = { ...fromProfile, ...(customer ?? {}) };
+      profileUsed = profileId;
+    }
+    if (!resolvedCustomer) {
+      return errorText("either profileId or customer (firstName/lastName/email/phone) is required");
+    }
     const result = await travalaBookPay({
       packageId,
       sessionId,
-      customer,
+      customer: resolvedCustomer,
       agentId,
       rewardWallet,
       wallet,
@@ -3768,13 +3959,13 @@ server.tool(
       network: "base",
       chainId: 8453,
       title: `Travala booking ${result.bookingId ?? "(pending)"}`,
-      summary: `package ${packageId} for ${customer.firstName} ${customer.lastName}`,
+      summary: `package ${packageId} for ${resolvedCustomer.firstName} ${resolvedCustomer.lastName}`,
       walletName: policy.walletName,
       from: wallet.address,
       txHash: result.paid?.settlement?.transaction,
-      result: { ...result, agentId, rewardWallet },
+      result: { ...result, agentId, rewardWallet, profileUsed },
     });
-    return text({ result, receipt, agentId, rewardWallet, warning: result.warning });
+    return text({ result, receipt, agentId, rewardWallet, profileUsed, warning: result.warning });
   },
 );
 

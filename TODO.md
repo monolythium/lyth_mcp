@@ -590,6 +590,18 @@ Non-goals: do not become a custody wallet for these chains; do not silently rais
 - [x] **MCP** Added `external_commerce` gate to `readiness_check` covering EVM wallet, ERC-20 builders, x402 client, NOWPayments IPN, Travala bridge tools, and ERC-8004 config; surfaces gaps (live broadcast off by default, ERC-8004 on-chain registration gated, Coinsbee direct API gated).
 - [ ] **MCP** Production switch (sandbox → live) policy: principal-wallet-signed approval + empty outbox + caps explicitly set + working `mcp_self_check` is documented in the gate description; an enforcing tool (`evm_submit_enable_draft`) is still TODO.
 
+## P15: Secure Traveler Profiles
+
+Scope: encrypted local PII store so the agent doesn't have to re-type legal name / DOB / passport / contact / ticket-delivery email on every booking. Same AES-256-GCM + scrypt model as wallets. Plaintext only via explicit `profile_reveal` confirmation; `profile_list` / `profile_get` return masked previews.
+
+- [x] **MCP** `src/profiles.ts` with encrypted store, redacted summary (masked email/phone/DOB/passport last-4), validation, and `customerFieldsFromProfile` mapping (`preferredName ?? legalFirstName`, `ticketDeliveryEmail ?? contact.email`).
+- [x] **MCP** Tools: `profile_create`, `profile_update`, `profile_list`, `profile_get`, `profile_reveal` (confirmation-gated), `profile_delete`, `profile_store_info`.
+- [x] **MCP** `travala_book_pay` accepts `profileId` and pulls customer fields from the encrypted profile; explicit `customer` fields still override per-call.
+- [x] **MCP** Smoke tests: encryption round-trip, redaction (raw passport never appears in stored or list output), update preserves untouched fields, customer-field mapping rules.
+- [x] **MCP** Docs: `docs/EXTERNAL_COMMERCE.md` "Secure traveler profiles" section with full schema, redaction example, and booking integration.
+- [ ] **MCP** Future: passport + DOB pass-through to flight connectors once a flight booking path lands (Travala MCP today is hotels-only).
+- [ ] **MCP** Future: KTN / TSA PreCheck / Global Entry pass-through for airline connectors.
+
 ## Suggested Build Order
 
 1. **Make payments reliable.** Outbox, preflight, receipts, node health, status watcher.
@@ -603,6 +615,7 @@ Non-goals: do not become a custody wallet for these chains; do not silently rais
 9. **Make operator tooling useful.** Cluster registry, service tiers, staking/autovote.
 10. **Make emergency/security legible.** G3, checkpoint, bridge freeze, recovery, research-gate status.
 11. **Make external commerce reachable.** EVM hot wallet + ERC-20 builders + x402 + NOWPayments sandbox + Travala-via-peer-MCP + Coinsbee interim. Sandbox-first; production switch is an explicit gate.
+12. **Make travel painless.** Secure traveler profiles supply customer fields to vendor bookings without the agent re-typing PII; passport / KTN / FF data is stored encrypted for the day flight connectors land.
 
 ## Non-Goals
 

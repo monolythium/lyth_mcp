@@ -11,6 +11,7 @@ Pages:
 - [NOWPayments](#nowpayments)
 - [Travala](#travala)
 - [Coinsbee](#coinsbee)
+- [Secure traveler profiles](#secure-traveler-profiles)
 - [Production switch checklist](#production-switch-checklist)
 
 ---
@@ -286,6 +287,106 @@ Code retrieval is via email from Coinsbee today; the agent can't auto-fetch the 
 A direct `coinsbee_*` connector will land only after the partnership returns real endpoints — no fabricated endpoints.
 
 ---
+
+## Secure Traveler Profiles
+
+Frequent-traveler PII (legal name, DOB, passport, contact, ticket delivery email, frequent-flyer numbers, etc.) lives in an encrypted local store with the same model as wallets: AES-256-GCM with a scrypt-derived passphrase key, or a local-machine key for lower-sensitivity setups. Only a redacted preview is visible to `profile_list` / `profile_get`; plaintext requires `profile_reveal`.
+
+### Schema
+
+```json
+{
+  "legalFirstName": "Nayiem",
+  "legalMiddleName": null,
+  "legalLastName": "Willems",
+  "preferredName": "Nayiem",
+  "dateOfBirth": "1990-01-15",
+  "nationality": "CA",
+  "gender": "M",
+  "passports": [
+    { "number": "AB1234567", "countryOfIssue": "CA", "expiresOn": "2030-06-01", "issuedOn": "2020-06-01" }
+  ],
+  "knownTravelerNumbers": { "globalEntry": "GE1234567" },
+  "frequentFlyerNumbers": [
+    { "airline": "AC", "number": "AC123" },
+    { "airline": "WS", "number": "WS456" }
+  ],
+  "contact": {
+    "email": "primary@example.com",
+    "phone": "+15555550101",
+    "alternateEmail": "backup@example.com"
+  },
+  "ticketDeliveryEmail": "tickets@example.com",
+  "mailingAddress": { "street": "123 Main St", "city": "Kamloops", "region": "BC", "postalCode": "V2C 1A1", "country": "CA" },
+  "emergencyContact": { "name": "Jane", "phone": "+15555550102", "relationship": "spouse" },
+  "dietaryPreferences": "vegetarian",
+  "accessibilityNeeds": null,
+  "notes": null
+}
+```
+
+### Create + manage
+
+```text
+profile_create
+  confirm     = "CREATE_TRAVELER_PROFILE"
+  id          = "nayiem"
+  displayName = "Nayiem (personal)"
+  profile     = { ... schema above ... }
+  passphrase  = "<≥12 chars>"           # or allowLocalKey: true for lower-sensitivity setups
+
+profile_update                          # confirm = "UPDATE_TRAVELER_PROFILE"; patch only the fields you supply
+profile_list                            # redacted previews only
+profile_get      id = "nayiem"          # redacted preview only
+profile_reveal   id = "nayiem"  confirm = "REVEAL_TRAVELER_PROFILE"   # plaintext; do not paste into chat history
+profile_delete   id = "nayiem"  confirmId = "nayiem"  confirm = "DELETE_TRAVELER_PROFILE"
+profile_store_info
+```
+
+### Redaction example
+
+`profile_get` returns:
+
+```json
+{
+  "legalName": "Nayiem W•••••••",
+  "dateOfBirth": "1990-••-••",
+  "contact": { "email": "pr•••••@example.com", "phone": "+1•••••••0101", "hasAlternateEmail": true },
+  "ticketDeliveryEmail": "ti••••••@example.com",
+  "passports": [{ "countryOfIssue": "CA", "expiresOn": "2030-06-01", "last4": "4567" }],
+  "frequentFlyerCount": 2,
+  "hasMailingAddress": true,
+  "hasEmergencyContact": true,
+  "hasKnownTraveler": true
+}
+```
+
+### Using a profile to book
+
+```text
+travala_book_pay
+  packageId  = "..."
+  sessionId  = "..."
+  profileId  = "nayiem"                 # pulls firstName/lastName/email/phone from the encrypted profile
+  # customer  = { ... }                 # optional override; merged on top of profile values
+  dryRun     = true
+```
+
+Mapping rules:
+
+- `firstName` ← `preferredName` if set, else `legalFirstName`
+- `lastName`  ← `legalLastName`
+- `email`     ← `ticketDeliveryEmail` if set, else `contact.email`
+- `phone`     ← `contact.phone`
+
+Pass `customer` alongside `profileId` to override specific fields per booking (e.g. a different `email` for a one-off). Passport and DOB are not sent to Travala today — they're stored for flight bookings once a flight connector lands.
+
+### Safety notes
+
+- Profile passphrases are never written anywhere. If you forget the passphrase on a passphrase-protected profile, the profile is unrecoverable.
+- `LYTH_MCP_PROFILE_PASSPHRASE` (or `LYTH_MCP_WALLET_PASSPHRASE` as a fallback) lets you avoid passing it per call, but it lives in the process environment — only use it in trusted shells.
+- The local-machine key (when `allowLocalKey: true`) is just `~/.lyth_mcp/profiles.key`; protect it like an SSH private key.
+- `profile_reveal` output contains plaintext PII — never paste it into chat history or commit it.
 
 ## Production Switch Checklist
 

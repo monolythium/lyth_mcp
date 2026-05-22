@@ -930,6 +930,7 @@ Quick map:
 | NOWPayments | `nowpayments_configure`, `nowpayments_estimate`, `nowpayments_payment_create`, `nowpayments_invoice_create`, `nowpayments_payment_status`, `nowpayments_ipn_verify` |
 | Travala (book + pay via x402) | `travala_info`, `travala_book_pay`, `travala_book_recover`, `travala_proxy_call` |
 | Coinsbee (interim NOWPayments path) | `coinsbee_guide`, `coinsbee_via_nowpayments_track` |
+| Secure traveler profiles (encrypted PII) | `profile_create`, `profile_update`, `profile_list`, `profile_get`, `profile_reveal`, `profile_delete`, `profile_store_info` |
 | Readiness | `readiness_check gate=external_commerce` |
 
 Full walkthroughs (setup, examples, recovery, production switch checklist) live in `docs/EXTERNAL_COMMERCE.md`.
