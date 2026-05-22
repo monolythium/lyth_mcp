@@ -256,6 +256,19 @@ export interface DuffelOffer {
   available_services?: unknown;
 }
 
+export type DuffelIdentityDocumentType =
+  | "passport"
+  | "tax_id"
+  | "known_traveler_number"
+  | "passenger_redress_number";
+
+export interface DuffelIdentityDocument {
+  unique_identifier: string;
+  expires_on: string;          // YYYY-MM-DD (Duffel requires this; for KTN/redress without expiry, use a far-future date)
+  issuing_country_code: string;
+  type: DuffelIdentityDocumentType;
+}
+
 export interface DuffelOrderPassenger {
   id: string;
   type: DuffelPassengerType;
@@ -266,12 +279,8 @@ export interface DuffelOrderPassenger {
   born_on?: string;
   email?: string;
   phone_number?: string;
-  identity_documents?: Array<{
-    unique_identifier: string;
-    expires_on: string;
-    issuing_country_code: string;
-    type: "passport";
-  }>;
+  // Duffel restriction: at most ONE identity_documents entry per passenger.
+  identity_documents?: DuffelIdentityDocument[];
   loyalty_programme_accounts?: Array<{ airline_iata_code: string; account_number: string }>;
   infant_passenger_id?: string;
 }
@@ -405,18 +414,56 @@ function pickPassportForCountry(
   return [...passports].sort(byLatestExpiry)[0];
 }
 
+// Picks the most universal KTN value from the profile. Global Entry / NEXUS /
+// SENTRI members get KTNs that work for TSA PreCheck — they all go in the
+// single `known_traveler_number` slot. We prefer Global Entry → TSA PreCheck →
+// NEXUS → first 'other' entry.
+function pickKnownTravelerNumber(profile: ProfilePlaintext): string | undefined {
+  const ktn = profile.knownTravelerNumbers;
+  if (!ktn) return undefined;
+  if (ktn.globalEntry) return ktn.globalEntry;
+  if (ktn.tsaPrecheck) return ktn.tsaPrecheck;
+  if (ktn.nexus) return ktn.nexus;
+  if (ktn.other) {
+    const first = Object.values(ktn.other).find((v) => v && v.trim() !== "");
+    if (first) return first;
+  }
+  return undefined;
+}
+
+const NEVER_EXPIRES = "2099-12-31";
+
+export type DuffelIdentityDocumentPreference =
+  | "passport"
+  | "known_traveler_number"
+  | "passenger_redress_number"
+  | "none";
+
 export function duffelPassengerFromProfile(args: {
   profile: ProfilePlaintext;
   passengerId: string;
   type?: DuffelPassengerType;
   preferredPassportCountry?: string;
+  /**
+   * Which identity document to attach. Duffel limits the passenger to ONE
+   * identity document; the airline's supported_passenger_identity_document_types
+   * dictates which to send. Default: "passport".
+   * - "none" omits identity_documents entirely (some domestic itineraries).
+   */
+  identityDocumentPreference?: DuffelIdentityDocumentPreference;
+  /** Legacy alias for identityDocumentPreference === "none". Default true. */
   includePassport?: boolean;
   includeLoyalty?: boolean;
+  /** Country code for KTN / redress (defaults to nationality, then 'US'). */
+  ktnIssuingCountry?: string;
+  redressIssuingCountry?: string;
 }): DuffelOrderPassenger {
   const givenName = args.profile.preferredName ?? args.profile.legalFirstName;
   const familyName = args.profile.legalLastName;
   const gender = args.profile.gender === "M" ? "m" : args.profile.gender === "F" ? "f" : undefined;
-  const passport = args.includePassport === false ? undefined : pickPassportForCountry(args.profile, args.preferredPassportCountry);
+  const preference: DuffelIdentityDocumentPreference =
+    args.includePassport === false ? "none" : (args.identityDocumentPreference ?? "passport");
+
   const out: DuffelOrderPassenger = {
     id: args.passengerId,
     type: args.type ?? "adult",
@@ -427,14 +474,39 @@ export function duffelPassengerFromProfile(args: {
   };
   if (gender) out.gender = gender;
   if (args.profile.dateOfBirth) out.born_on = args.profile.dateOfBirth;
-  if (passport) {
-    out.identity_documents = [{
-      unique_identifier: passport.number,
-      expires_on: passport.expiresOn,
-      issuing_country_code: passport.countryOfIssue.toUpperCase(),
-      type: "passport",
-    }];
+
+  if (preference === "passport") {
+    const passport = pickPassportForCountry(args.profile, args.preferredPassportCountry);
+    if (passport) {
+      out.identity_documents = [{
+        unique_identifier: passport.number,
+        expires_on: passport.expiresOn,
+        issuing_country_code: passport.countryOfIssue.toUpperCase(),
+        type: "passport",
+      }];
+    }
+  } else if (preference === "known_traveler_number") {
+    const ktn = pickKnownTravelerNumber(args.profile);
+    if (ktn) {
+      out.identity_documents = [{
+        unique_identifier: ktn,
+        expires_on: NEVER_EXPIRES,
+        issuing_country_code: (args.ktnIssuingCountry ?? args.profile.nationality ?? "US").toUpperCase(),
+        type: "known_traveler_number",
+      }];
+    }
+  } else if (preference === "passenger_redress_number") {
+    if (args.profile.redressNumber) {
+      out.identity_documents = [{
+        unique_identifier: args.profile.redressNumber,
+        expires_on: NEVER_EXPIRES,
+        issuing_country_code: (args.redressIssuingCountry ?? args.profile.nationality ?? "US").toUpperCase(),
+        type: "passenger_redress_number",
+      }];
+    }
   }
+  // preference === "none": skip identity_documents entirely.
+
   if (args.includeLoyalty !== false && args.profile.frequentFlyerNumbers?.length) {
     out.loyalty_programme_accounts = args.profile.frequentFlyerNumbers.map((ff) => ({
       airline_iata_code: ff.airline.toUpperCase(),

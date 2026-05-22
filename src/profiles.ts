@@ -71,6 +71,7 @@ export interface ProfilePlaintext {
     nexus?: string;
     other?: Record<string, string>;
   };
+  redressNumber?: string;          // DHS-issued; resolves false-positive watchlist matches
   frequentFlyerNumbers?: ProfileFrequentFlyer[];
   contact: {
     email: string;

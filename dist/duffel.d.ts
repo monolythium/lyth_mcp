@@ -139,6 +139,13 @@ export interface DuffelOffer {
     };
     available_services?: unknown;
 }
+export type DuffelIdentityDocumentType = "passport" | "tax_id" | "known_traveler_number" | "passenger_redress_number";
+export interface DuffelIdentityDocument {
+    unique_identifier: string;
+    expires_on: string;
+    issuing_country_code: string;
+    type: DuffelIdentityDocumentType;
+}
 export interface DuffelOrderPassenger {
     id: string;
     type: DuffelPassengerType;
@@ -149,12 +156,7 @@ export interface DuffelOrderPassenger {
     born_on?: string;
     email?: string;
     phone_number?: string;
-    identity_documents?: Array<{
-        unique_identifier: string;
-        expires_on: string;
-        issuing_country_code: string;
-        type: "passport";
-    }>;
+    identity_documents?: DuffelIdentityDocument[];
     loyalty_programme_accounts?: Array<{
         airline_iata_code: string;
         account_number: string;
@@ -229,13 +231,25 @@ export declare function duffelPayOrder(args: {
     currency: string;
     type?: "balance" | "arc_bsp_cash";
 }): Promise<unknown>;
+export type DuffelIdentityDocumentPreference = "passport" | "known_traveler_number" | "passenger_redress_number" | "none";
 export declare function duffelPassengerFromProfile(args: {
     profile: ProfilePlaintext;
     passengerId: string;
     type?: DuffelPassengerType;
     preferredPassportCountry?: string;
+    /**
+     * Which identity document to attach. Duffel limits the passenger to ONE
+     * identity document; the airline's supported_passenger_identity_document_types
+     * dictates which to send. Default: "passport".
+     * - "none" omits identity_documents entirely (some domestic itineraries).
+     */
+    identityDocumentPreference?: DuffelIdentityDocumentPreference;
+    /** Legacy alias for identityDocumentPreference === "none". Default true. */
     includePassport?: boolean;
     includeLoyalty?: boolean;
+    /** Country code for KTN / redress (defaults to nationality, then 'US'). */
+    ktnIssuingCountry?: string;
+    redressIssuingCountry?: string;
 }): DuffelOrderPassenger;
 export declare function summarizeOffer(offer: DuffelOffer): {
     id: string;

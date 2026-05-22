@@ -600,7 +600,8 @@ Scope: encrypted local PII store so the agent doesn't have to re-type legal name
 - [x] **MCP** Smoke tests: encryption round-trip, redaction (raw passport never appears in stored or list output), update preserves untouched fields, customer-field mapping rules.
 - [x] **MCP** Docs: `docs/EXTERNAL_COMMERCE.md` "Secure traveler profiles" section with full schema, redaction example, and booking integration.
 - [x] **MCP** Passport + DOB + FF pass-through wired into the Duffel flight connector via `passengerProfiles` (see P16).
-- [ ] **MCP** Future: KTN / TSA PreCheck / Global Entry pass-through for airline connectors (stored in profile today, not yet sent on the wire).
+- [x] **MCP** KTN / TSA PreCheck / Global Entry / NEXUS pass-through wired into the Duffel passenger object via `identityDocumentPreference: "known_traveler_number"`. Profile field reuses `knownTravelerNumbers` (Global Entry preferred → TSA PreCheck → NEXUS → other).
+- [x] **MCP** DHS redress number pass-through (`identityDocumentPreference: "passenger_redress_number"`); profile gains a `redressNumber` field.
 
 ## P16: Flight Connectors
 
@@ -613,8 +614,8 @@ Scope: get the agent as close to autonomous flight booking as today's vendor sur
 - [x] **MCP** Crypto-checkout interim: `flight_ota_nowpayments_track` mirrors the Coinsbee pattern for paying through a crypto-accepting OTA's web checkout (Travala / Alternative Airlines / CheapAir).
 - [x] **MCP** Future-readiness probe: `travala_flight_capability_probe` calls `tools/list` on Travala's hosted MCP and surfaces flight tools the moment they ship.
 - [x] **MCP** Docs: `docs/EXTERNAL_COMMERCE.md` "Flight connectors" section with the search → offer → hold → pay flow + the OTA-via-NOWPayments alternative + honest gaps.
-- [ ] **MCP** Future: KTN / Global Entry pass-through on the Duffel passenger object (Duffel supports KTN on some carriers; needs schema extension on the order tool).
-- [ ] **MCP** Future: live Duffel sandbox integration test gated by `LYTH_MCP_LIVE_DUFFEL_TEST=1` + a real test-mode access token.
+- [x] **MCP** KTN / Global Entry / redress pass-through on the Duffel passenger object via `identityDocumentPreference` (passport | known_traveler_number | passenger_redress_number | none). Respects Duffel's one-document-per-passenger constraint with a runtime guard on the explicit-passenger schema.
+- [x] **MCP** Gated live Duffel sandbox smoke test (`LYTH_MCP_LIVE_DUFFEL_TEST=1` + `LYTH_MCP_DUFFEL_TEST_TOKEN`): runs LHR→JFK 90-days-out, asserts `live_mode=false`, never creates an order.
 - [ ] **MCP** Future: a crypto-payment shim — once a Duffel x402/USDC payment path exists (or a partner OTA exposes one), wire it through `x402_pay` so the agent can complete instant bookings in crypto.
 
 ## Suggested Build Order

@@ -601,6 +601,89 @@ assert(pickUs.identity_documents?.[0]?.unique_identifier === "USAUSAUSA", "shoul
 const skipPassport = duffel.duffelPassengerFromProfile({ profile: multiProfile, passengerId: "p1", includePassport: false });
 assert(skipPassport.identity_documents === undefined, "includePassport:false must omit passport");
 
+// KTN + redress mapping (Duffel allows ONE identity document per passenger)
+const ktnProfile = {
+  ...revealedPatched,
+  nationality: "US",
+  knownTravelerNumbers: { globalEntry: "GE111222333", tsaPrecheck: "TT444555666" },
+  redressNumber: "RR9876543",
+};
+const ktnPicked = duffel.duffelPassengerFromProfile({
+  profile: ktnProfile,
+  passengerId: "p1",
+  identityDocumentPreference: "known_traveler_number",
+});
+assert(ktnPicked.identity_documents?.length === 1, "ktn preference must emit exactly one identity document");
+assert(ktnPicked.identity_documents?.[0]?.type === "known_traveler_number", "ktn doc type must be known_traveler_number");
+assert(ktnPicked.identity_documents?.[0]?.unique_identifier === "GE111222333", "ktn must prefer globalEntry over tsaPrecheck");
+assert(ktnPicked.identity_documents?.[0]?.issuing_country_code === "US", "ktn issuing country defaults to profile nationality");
+
+const ktnTsaOnly = duffel.duffelPassengerFromProfile({
+  profile: { ...ktnProfile, knownTravelerNumbers: { tsaPrecheck: "TT444555666" } },
+  passengerId: "p1",
+  identityDocumentPreference: "known_traveler_number",
+});
+assert(ktnTsaOnly.identity_documents?.[0]?.unique_identifier === "TT444555666", "ktn falls back to tsaPrecheck when no globalEntry");
+
+const redressPicked = duffel.duffelPassengerFromProfile({
+  profile: ktnProfile,
+  passengerId: "p1",
+  identityDocumentPreference: "passenger_redress_number",
+});
+assert(redressPicked.identity_documents?.[0]?.type === "passenger_redress_number", "redress type must pass through");
+assert(redressPicked.identity_documents?.[0]?.unique_identifier === "RR9876543", "redress number must pass through");
+
+const noneId = duffel.duffelPassengerFromProfile({
+  profile: ktnProfile,
+  passengerId: "p1",
+  identityDocumentPreference: "none",
+});
+assert(noneId.identity_documents === undefined, "preference=none must omit identity_documents");
+
+const ktnNoData = duffel.duffelPassengerFromProfile({
+  profile: { ...revealedPatched, knownTravelerNumbers: undefined },
+  passengerId: "p1",
+  identityDocumentPreference: "known_traveler_number",
+});
+assert(ktnNoData.identity_documents === undefined, "ktn preference with no KTN in profile must omit identity_documents");
+
+// Gated live Duffel sandbox check. Off by default. Set LYTH_MCP_LIVE_DUFFEL_TEST=1
+// and either DUFFEL_ACCESS_TOKEN or LYTH_MCP_DUFFEL_TEST_TOKEN to a test-mode
+// access token (https://duffel.com → Settings → Access Tokens → Test mode).
+// Does only read-only searches; never creates an order.
+let liveDuffelOk = "skipped";
+if (process.env.LYTH_MCP_LIVE_DUFFEL_TEST === "1") {
+  const token = process.env.LYTH_MCP_DUFFEL_TEST_TOKEN || process.env.DUFFEL_ACCESS_TOKEN;
+  if (!token) {
+    throw new Error("LYTH_MCP_LIVE_DUFFEL_TEST=1 requires LYTH_MCP_DUFFEL_TEST_TOKEN or DUFFEL_ACCESS_TOKEN");
+  }
+  process.env.LYTH_MCP_DUFFEL_CONFIG = join(temp, "duffel.json");
+  process.env.LYTH_MCP_DUFFEL_KEY = join(temp, "duffel.key");
+  await duffel.configureDuffel({ declaredEnvironment: "test", accessToken: token });
+
+  // Far-future date so airlines actually return offers.
+  const future = new Date();
+  future.setDate(future.getDate() + 90);
+  const departureDate = future.toISOString().slice(0, 10);
+
+  const request = await duffel.duffelCreateOfferRequest({
+    slices: [{ origin: "LHR", destination: "JFK", departure_date: departureDate }],
+    passengers: [{ type: "adult" }],
+    cabinClass: "economy",
+  });
+  assert(typeof request.id === "string" && request.id.startsWith("orq_"), "offer_request id must look like orq_*");
+  assert(request.live_mode === false, "test-mode token must produce live_mode=false");
+
+  const offers = await duffel.duffelListOffers({ offerRequestId: request.id, sort: "total_amount", limit: 5 });
+  if (offers.length > 0) {
+    const firstOffer = await duffel.duffelGetOffer(offers[0].id);
+    assert(firstOffer.id === offers[0].id, "duffelGetOffer must return the requested offer");
+    liveDuffelOk = `searched LHR→JFK ${departureDate}: ${offers.length} offers, top ${offers[0].total_amount} ${offers[0].total_currency}`;
+  } else {
+    liveDuffelOk = `searched LHR→JFK ${departureDate}: 0 offers returned (sandbox may be quiet)`;
+  }
+}
+
 await profiles.deleteProfile("smoke-profile", "smoke-profile");
 const after = await profiles.listProfiles();
 assert(after.find((p) => p.id === "smoke-profile") === undefined, "delete must remove the profile");
@@ -640,6 +723,12 @@ console.log(JSON.stringify({
     duffelPassenger.identity_documents?.[0]?.unique_identifier === "AB1234567" &&
     pickLatestCa.identity_documents?.[0]?.unique_identifier === "NEWNEWNEW" &&
     pickUs.identity_documents?.[0]?.unique_identifier === "USAUSAUSA",
+  duffelKtnRedressMappingOk:
+    ktnPicked.identity_documents?.[0]?.unique_identifier === "GE111222333" &&
+    ktnTsaOnly.identity_documents?.[0]?.unique_identifier === "TT444555666" &&
+    redressPicked.identity_documents?.[0]?.unique_identifier === "RR9876543" &&
+    noneId.identity_documents === undefined,
+  liveDuffel: liveDuffelOk,
 }, null, 2));
 
 async function startMockRpc() {

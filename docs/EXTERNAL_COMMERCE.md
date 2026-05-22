@@ -474,10 +474,23 @@ The mapping uses [secure traveler profiles](#secure-traveler-profiles):
 - `born_on`           ← `dateOfBirth`
 - `email`             ← `ticketDeliveryEmail ?? contact.email`
 - `phone_number`      ← `contact.phone`
-- `identity_documents[0]` ← latest-expiring passport matching `preferredPassportCountry`, falling back to the latest-expiring of any country
+- `identity_documents[0]` ← controlled by `identityDocumentPreference` (see below)
 - `loyalty_programme_accounts` ← all `frequentFlyerNumbers`
 
-Pass `includePassport: false` for domestic legs that don't require passport. Mix explicit `passengers` + `passengerProfiles` in the same call (e.g. one profile-bound adult + one infant supplied inline).
+### Identity document preference (passport vs KTN vs redress)
+
+Duffel allows **exactly one** `identity_documents` entry per passenger. Airlines tell you which they accept via the offer's `supported_passenger_identity_document_types`: `passport`, `tax_id`, `known_traveler_number`, or `passenger_redress_number`. International itineraries need `passport`; US domestic typically uses `known_traveler_number`.
+
+Set `identityDocumentPreference` on the binding to pick which:
+
+| preference | profile field used |
+|---|---|
+| `"passport"` (default) | latest-expiring passport matching `preferredPassportCountry`, else latest of any country |
+| `"known_traveler_number"` | `knownTravelerNumbers.globalEntry ?? .tsaPrecheck ?? .nexus ?? .other[*]` (Global Entry / NEXUS KTNs work for TSA PreCheck) |
+| `"passenger_redress_number"` | `redressNumber` (DHS TRIP) |
+| `"none"` | omit `identity_documents` entirely |
+
+`includePassport: false` is preserved as a legacy alias for `identityDocumentPreference: "none"`. Mix explicit `passengers` + `passengerProfiles` in the same call (e.g. one profile-bound adult + one infant supplied inline). The explicit-passenger schema also accepts `knownTravelerNumber` and `passengerRedressNumber` directly (only one of `passport` / `knownTravelerNumber` / `passengerRedressNumber` may be set per passenger).
 
 ### Pay or cancel
 
@@ -530,6 +543,16 @@ Code retrieval / e-tickets come from the OTA by email — the agent can't auto-f
 ### Travala flight-capability probe
 
 `travala_flight_capability_probe` calls `tools/list` on Travala's hosted MCP and reports whether any flight tools have shipped. When they do, `travala_proxy_call` forwards arbitrary tool calls to them. Today Travala's MCP is hotels-only.
+
+### Live Duffel sandbox check
+
+`npm test` includes a gated live-sandbox probe:
+
+```bash
+LYTH_MCP_LIVE_DUFFEL_TEST=1 LYTH_MCP_DUFFEL_TEST_TOKEN=duffel_test_... npm test
+```
+
+It runs a read-only LHR → JFK search 90 days out (no order creation), asserts the response is `live_mode=false` (i.e. simulated), and prints the top fare. Off by default so the suite stays fully offline.
 
 ### Honest gaps
 

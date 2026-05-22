@@ -3771,6 +3771,7 @@ const ProfilePlaintextSchema = z.object({
     nexus: z.string().optional(),
     other: z.record(z.string(), z.string()).optional(),
   }).optional(),
+  redressNumber: z.string().optional().describe("DHS-issued redress number (TRIP), if applicable."),
   frequentFlyerNumbers: z.array(ProfileFrequentFlyerSchema).optional(),
   contact: z.object({
     email: z.string().email(),
@@ -4024,10 +4025,20 @@ const DuffelOrderPassengerSchema = z.object({
   bornOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   email: z.string().email().optional(),
   phoneNumber: z.string().optional(),
+  // Duffel constraint: at most one of these may be set. The airline's
+  // supported_passenger_identity_document_types on the offer dictates which.
   passport: z.object({
     number: z.string().min(3),
     expiresOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     issuingCountryCode: z.string().min(2),
+  }).optional(),
+  knownTravelerNumber: z.object({
+    number: z.string().min(3),
+    issuingCountryCode: z.string().min(2).optional().describe("Defaults to 'US'."),
+  }).optional(),
+  passengerRedressNumber: z.object({
+    number: z.string().min(3),
+    issuingCountryCode: z.string().min(2).optional().describe("Defaults to 'US'."),
   }).optional(),
   loyaltyProgrammes: z.array(z.object({ airlineIataCode: z.string().min(2), accountNumber: z.string().min(1) })).optional(),
 });
@@ -4044,12 +4055,30 @@ function buildPassengerFromSchema(p: z.infer<typeof DuffelOrderPassengerSchema>)
   if (p.bornOn) out.born_on = p.bornOn;
   if (p.email) out.email = p.email;
   if (p.phoneNumber) out.phone_number = p.phoneNumber;
+  const idCount = [p.passport, p.knownTravelerNumber, p.passengerRedressNumber].filter(Boolean).length;
+  if (idCount > 1) {
+    throw new Error(`passenger ${p.id} has multiple identity_documents; Duffel allows only one (passport, knownTravelerNumber, or passengerRedressNumber)`);
+  }
   if (p.passport) {
     out.identity_documents = [{
       unique_identifier: p.passport.number,
       expires_on: p.passport.expiresOn,
       issuing_country_code: p.passport.issuingCountryCode.toUpperCase(),
       type: "passport",
+    }];
+  } else if (p.knownTravelerNumber) {
+    out.identity_documents = [{
+      unique_identifier: p.knownTravelerNumber.number,
+      expires_on: "2099-12-31",
+      issuing_country_code: (p.knownTravelerNumber.issuingCountryCode ?? "US").toUpperCase(),
+      type: "known_traveler_number",
+    }];
+  } else if (p.passengerRedressNumber) {
+    out.identity_documents = [{
+      unique_identifier: p.passengerRedressNumber.number,
+      expires_on: "2099-12-31",
+      issuing_country_code: (p.passengerRedressNumber.issuingCountryCode ?? "US").toUpperCase(),
+      type: "passenger_redress_number",
     }];
   }
   if (p.loyaltyProgrammes) {
@@ -4066,8 +4095,12 @@ const PassengerProfileBindingSchema = z.object({
   profileId: z.string().min(1),
   type: z.enum(["adult", "child", "infant_without_seat"]).optional(),
   preferredPassportCountry: z.string().optional(),
-  includePassport: z.boolean().optional().describe("Default true. Set false for domestic legs that don't require passport."),
+  identityDocumentPreference: z.enum(["passport", "known_traveler_number", "passenger_redress_number", "none"]).optional()
+    .describe("Duffel allows exactly ONE identity document per passenger. Pick the type the offer's airline supports (see supported_passenger_identity_document_types). Default: 'passport'."),
+  includePassport: z.boolean().optional().describe("Legacy: set false to omit identity_documents. Equivalent to identityDocumentPreference='none'."),
   includeLoyalty: z.boolean().optional(),
+  ktnIssuingCountry: z.string().optional().describe("Country code for the KTN (defaults to profile nationality, then 'US')."),
+  redressIssuingCountry: z.string().optional(),
   profilePassphrase: z.string().optional(),
 });
 
@@ -4082,8 +4115,11 @@ async function buildPassengersFromBindings(
       passengerId: b.passengerId,
       type: b.type as DuffelPassengerType | undefined,
       preferredPassportCountry: b.preferredPassportCountry,
+      identityDocumentPreference: b.identityDocumentPreference,
       includePassport: b.includePassport,
       includeLoyalty: b.includeLoyalty,
+      ktnIssuingCountry: b.ktnIssuingCountry,
+      redressIssuingCountry: b.redressIssuingCountry,
     }));
   }
   return out;

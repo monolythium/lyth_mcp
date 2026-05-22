@@ -51,6 +51,7 @@ export interface ProfilePlaintext {
         nexus?: string;
         other?: Record<string, string>;
     };
+    redressNumber?: string;
     frequentFlyerNumbers?: ProfileFrequentFlyer[];
     contact: {
         email: string;
