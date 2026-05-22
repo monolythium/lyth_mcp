@@ -237,3 +237,14 @@ export async function travalaBookStatus(args: { packageId: string; sessionId: st
 export async function travalaProxyCall(args: { tool: string; args: Record<string, unknown> }): Promise<McpToolCallResult> {
   return travalaCallTool(args.tool, args.args);
 }
+
+export interface TravalaToolListEntry {
+  name: string;
+  description?: string;
+  inputSchema?: unknown;
+}
+
+export async function travalaListTools(): Promise<TravalaToolListEntry[]> {
+  const result = await mcpJsonRpc<{ tools: TravalaToolListEntry[] }>(travalaMcpUrl(), "tools/list", {});
+  return Array.isArray(result.tools) ? result.tools : [];
+}

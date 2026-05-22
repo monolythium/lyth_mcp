@@ -58,3 +58,9 @@ export declare function travalaProxyCall(args: {
     tool: string;
     args: Record<string, unknown>;
 }): Promise<McpToolCallResult>;
+export interface TravalaToolListEntry {
+    name: string;
+    description?: string;
+    inputSchema?: unknown;
+}
+export declare function travalaListTools(): Promise<TravalaToolListEntry[]>;

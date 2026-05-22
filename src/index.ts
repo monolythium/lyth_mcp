@@ -268,9 +268,31 @@ import {
 import {
   travalaBookPay,
   travalaBookStatus,
+  travalaListTools,
   travalaMcpUrl,
   travalaProxyCall,
 } from "./travala.js";
+import {
+  configureDuffel,
+  duffelCancelOrder,
+  duffelConfigRedacted,
+  duffelConfirmCancellation,
+  duffelCreateOfferRequest,
+  duffelCreateOrder,
+  duffelGetOffer,
+  duffelGetOrder,
+  duffelGetSeatMaps,
+  duffelListOffers,
+  duffelListOrders,
+  duffelPassengerFromProfile,
+  duffelPayOrder,
+  summarizeOffer,
+  summarizeOrder,
+  type DuffelCabin,
+  type DuffelOrderPassenger,
+  type DuffelPassengerType,
+  type DuffelSlice,
+} from "./duffel.js";
 import {
   configureNowpayments,
   nowpaymentsCreateInvoice,
@@ -1829,6 +1851,20 @@ const MCP_TOOL_NAMES = [
   "profile_reveal",
   "profile_delete",
   "profile_store_info",
+  "duffel_configure",
+  "duffel_config_redacted",
+  "flight_search",
+  "flight_offer_get",
+  "flight_seat_maps",
+  "flight_order_create_hold",
+  "flight_order_create_instant",
+  "flight_order_get",
+  "flight_order_list",
+  "flight_order_pay",
+  "flight_order_cancel",
+  "flight_order_cancel_confirm",
+  "flight_ota_nowpayments_track",
+  "travala_flight_capability_probe",
   "vendor_search",
   "provider_onboarding_draft",
   "order_create",
@@ -3859,6 +3895,382 @@ server.tool(
   {},
   async () => text(await profileStoreInfo()),
 );
+
+// ---------------------------------------------------------------------------
+// Flight connectors (P16)
+// - Duffel: real flight catalog + booking API. Test mode is free (signup at
+//   duffel.com); production needs balance funding. Payment is fiat-only at
+//   the API level; orders can be created on hold for the user to pay
+//   separately, or paid via Duffel balance with duffel_pay.
+// - flight_ota_nowpayments_track: same Coinsbee-style interim path for
+//   crypto-accepting OTA web checkouts that issue a NOWPayments invoice.
+// - travala_flight_capability_probe: surfaces flight tools the moment they
+//   ship on Travala's hosted MCP. Hotels-only today.
+// ---------------------------------------------------------------------------
+
+const DuffelSliceSchema = z.object({
+  origin: z.string().min(3),
+  destination: z.string().min(3),
+  departureDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  departureTime: z.object({ from: z.string(), to: z.string() }).optional(),
+});
+
+const DuffelSearchPassengerSchema = z.object({
+  type: z.enum(["adult", "child", "infant_without_seat"]),
+  age: z.number().int().min(0).max(120).optional(),
+  givenName: z.string().optional(),
+  familyName: z.string().optional(),
+});
+
+server.tool(
+  "duffel_configure",
+  "Configure the Duffel flight connector. Test mode uses a Duffel test access token; production uses a live token and real balance. Token type (not a separate URL) determines live vs. simulated bookings.",
+  {
+    declaredEnvironment: z.enum(["test", "live"]).default("test"),
+    accessToken: z.string().min(16),
+    defaultCurrency: z.string().min(3).optional(),
+    confirm: z.literal("CONFIGURE_DUFFEL"),
+  },
+  async ({ declaredEnvironment, accessToken, defaultCurrency }) => {
+    const config = await configureDuffel({ declaredEnvironment, accessToken, defaultCurrency });
+    return text({
+      configured: true,
+      declaredEnvironment: config.declaredEnvironment,
+      apiVersion: "v2",
+      defaultCurrency: config.defaultCurrency,
+      warning: declaredEnvironment === "live"
+        ? "Live Duffel configured. Booked orders are real bookings against real airline inventory. Confirm balance before flight_order_create_instant."
+        : undefined,
+    });
+  },
+);
+
+server.tool(
+  "duffel_config_redacted",
+  "Inspect the Duffel config (no token revealed).",
+  {},
+  async () => text({ config: await duffelConfigRedacted() }),
+);
+
+server.tool(
+  "flight_search",
+  "Search flights through Duffel. Returns a sorted offer list with summaries. Use cabin_class to filter; set maxConnections=0 for non-stop only. Pass returnOffers=false for a faster two-step flow (then call flight_offer_get).",
+  {
+    slices: z.array(DuffelSliceSchema).min(1).describe("One slice per leg. Round-trip = 2 slices."),
+    passengers: z.array(DuffelSearchPassengerSchema).min(1),
+    cabinClass: z.enum(["economy", "premium_economy", "business", "first"]).optional(),
+    maxConnections: z.number().int().min(0).max(3).optional(),
+    sort: z.enum(["total_amount", "total_duration"]).optional(),
+    limit: z.number().int().positive().max(200).optional(),
+  },
+  async ({ slices, passengers, cabinClass, maxConnections, sort, limit }) => {
+    const slicesForApi: DuffelSlice[] = slices.map((s) => ({
+      origin: s.origin.toUpperCase(),
+      destination: s.destination.toUpperCase(),
+      departure_date: s.departureDate,
+      departure_time: s.departureTime,
+    }));
+    const passengersForApi = passengers.map((p) => ({
+      type: p.type as DuffelPassengerType,
+      age: p.age,
+      given_name: p.givenName,
+      family_name: p.familyName,
+    }));
+    const request = await duffelCreateOfferRequest({
+      slices: slicesForApi,
+      passengers: passengersForApi,
+      cabinClass: cabinClass as DuffelCabin | undefined,
+      maxConnections,
+    });
+    const offers = await duffelListOffers({ offerRequestId: request.id, sort: sort ?? "total_amount", limit: limit ?? 30 });
+    return text({
+      offerRequestId: request.id,
+      liveMode: request.live_mode,
+      cabinClass: request.cabin_class,
+      passengers: request.passengers,
+      offerCount: offers.length,
+      offers: offers.map(summarizeOffer),
+    });
+  },
+);
+
+server.tool(
+  "flight_offer_get",
+  "Fetch the full offer (segments, fare conditions, available services like seats and bags) by id.",
+  {
+    offerId: z.string().min(1),
+    withServices: z.boolean().optional().describe("If true, includes seats / bags / extras. Heavier response."),
+  },
+  async ({ offerId, withServices }) => {
+    const offer = await duffelGetOffer(offerId, withServices ?? false);
+    return text({ offer, summary: summarizeOffer(offer) });
+  },
+);
+
+server.tool(
+  "flight_seat_maps",
+  "Fetch the seat map for an offer.",
+  { offerId: z.string().min(1) },
+  async ({ offerId }) => text({ seatMaps: await duffelGetSeatMaps(offerId) }),
+);
+
+const DuffelOrderPassengerSchema = z.object({
+  id: z.string().min(1).describe("Passenger id from the offer_request response."),
+  type: z.enum(["adult", "child", "infant_without_seat"]),
+  title: z.enum(["mr", "mrs", "ms", "miss", "dr"]).optional(),
+  givenName: z.string().min(1),
+  familyName: z.string().min(1),
+  gender: z.enum(["m", "f"]).optional(),
+  bornOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  email: z.string().email().optional(),
+  phoneNumber: z.string().optional(),
+  passport: z.object({
+    number: z.string().min(3),
+    expiresOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    issuingCountryCode: z.string().min(2),
+  }).optional(),
+  loyaltyProgrammes: z.array(z.object({ airlineIataCode: z.string().min(2), accountNumber: z.string().min(1) })).optional(),
+});
+
+function buildPassengerFromSchema(p: z.infer<typeof DuffelOrderPassengerSchema>): DuffelOrderPassenger {
+  const out: DuffelOrderPassenger = {
+    id: p.id,
+    type: p.type,
+    given_name: p.givenName,
+    family_name: p.familyName,
+  };
+  if (p.title) out.title = p.title;
+  if (p.gender) out.gender = p.gender;
+  if (p.bornOn) out.born_on = p.bornOn;
+  if (p.email) out.email = p.email;
+  if (p.phoneNumber) out.phone_number = p.phoneNumber;
+  if (p.passport) {
+    out.identity_documents = [{
+      unique_identifier: p.passport.number,
+      expires_on: p.passport.expiresOn,
+      issuing_country_code: p.passport.issuingCountryCode.toUpperCase(),
+      type: "passport",
+    }];
+  }
+  if (p.loyaltyProgrammes) {
+    out.loyalty_programme_accounts = p.loyaltyProgrammes.map((lp) => ({
+      airline_iata_code: lp.airlineIataCode.toUpperCase(),
+      account_number: lp.accountNumber,
+    }));
+  }
+  return out;
+}
+
+const PassengerProfileBindingSchema = z.object({
+  passengerId: z.string().min(1).describe("Passenger id from the offer (e.g. 'pas_00009...')."),
+  profileId: z.string().min(1),
+  type: z.enum(["adult", "child", "infant_without_seat"]).optional(),
+  preferredPassportCountry: z.string().optional(),
+  includePassport: z.boolean().optional().describe("Default true. Set false for domestic legs that don't require passport."),
+  includeLoyalty: z.boolean().optional(),
+  profilePassphrase: z.string().optional(),
+});
+
+async function buildPassengersFromBindings(
+  bindings: z.infer<typeof PassengerProfileBindingSchema>[],
+): Promise<DuffelOrderPassenger[]> {
+  const out: DuffelOrderPassenger[] = [];
+  for (const b of bindings) {
+    const profile = await revealProfile(b.profileId, b.profilePassphrase);
+    out.push(duffelPassengerFromProfile({
+      profile,
+      passengerId: b.passengerId,
+      type: b.type as DuffelPassengerType | undefined,
+      preferredPassportCountry: b.preferredPassportCountry,
+      includePassport: b.includePassport,
+      includeLoyalty: b.includeLoyalty,
+    }));
+  }
+  return out;
+}
+
+server.tool(
+  "flight_order_create_hold",
+  "Create a Duffel order on hold (no immediate payment). The order is held until payment_required_by. Pay later with flight_order_pay, or direct the user to a separate crypto-accepting checkout. Passengers can be supplied explicitly OR via profile bindings (passport + DOB + FF numbers pulled from encrypted profiles).",
+  {
+    offerId: z.string().min(1),
+    passengers: z.array(DuffelOrderPassengerSchema).optional(),
+    passengerProfiles: z.array(PassengerProfileBindingSchema).optional(),
+    metadata: z.record(z.string(), z.string()).optional(),
+    confirm: z.literal("CREATE_FLIGHT_HOLD"),
+  },
+  async ({ offerId, passengers, passengerProfiles, metadata }) => {
+    const explicit = (passengers ?? []).map(buildPassengerFromSchema);
+    const fromProfiles = passengerProfiles ? await buildPassengersFromBindings(passengerProfiles) : [];
+    const allPassengers = [...explicit, ...fromProfiles];
+    if (allPassengers.length === 0) {
+      return errorText("at least one passenger (explicit or profile-bound) is required");
+    }
+    const order = await duffelCreateOrder({
+      type: "hold",
+      selected_offers: [offerId],
+      passengers: allPassengers,
+      metadata,
+    });
+    const receipt = await addReceipt({
+      kind: "flight_order_create_hold",
+      status: order.payment_status?.awaiting_payment ? "submitted" : "confirmed",
+      network: "duffel",
+      chainId: CHAIN_ID,
+      title: `Flight hold ${order.booking_reference ?? order.id}`,
+      summary: `${order.total_amount} ${order.total_currency} — ${order.passengers.map((p) => `${p.given_name} ${p.family_name}`).join(", ")}; payment_required_by ${order.payment_status?.payment_required_by ?? "n/a"}`,
+      result: order,
+    });
+    return text({ order: summarizeOrder(order), receipt, raw: order, warning: order.live_mode ? undefined : "live_mode=false: this is a test order against Duffel's simulated airlines." });
+  },
+);
+
+server.tool(
+  "flight_order_create_instant",
+  "Create a Duffel order with immediate Duffel-balance payment (live mode requires a funded Duffel account). For crypto payment, use flight_order_create_hold + the user-side crypto checkout, or use flight_ota_nowpayments_track against a crypto-accepting OTA.",
+  {
+    offerId: z.string().min(1),
+    amount: z.string().min(1),
+    currency: z.string().min(3),
+    passengers: z.array(DuffelOrderPassengerSchema).optional(),
+    passengerProfiles: z.array(PassengerProfileBindingSchema).optional(),
+    paymentType: z.enum(["balance", "arc_bsp_cash"]).optional(),
+    metadata: z.record(z.string(), z.string()).optional(),
+    confirm: z.literal("CREATE_FLIGHT_INSTANT"),
+  },
+  async ({ offerId, amount, currency, passengers, passengerProfiles, paymentType, metadata }) => {
+    const explicit = (passengers ?? []).map(buildPassengerFromSchema);
+    const fromProfiles = passengerProfiles ? await buildPassengersFromBindings(passengerProfiles) : [];
+    const allPassengers = [...explicit, ...fromProfiles];
+    if (allPassengers.length === 0) {
+      return errorText("at least one passenger (explicit or profile-bound) is required");
+    }
+    const order = await duffelCreateOrder({
+      type: "instant",
+      selected_offers: [offerId],
+      passengers: allPassengers,
+      payments: [{ type: paymentType ?? "balance", amount, currency: currency.toUpperCase() }],
+      metadata,
+    });
+    const receipt = await addReceipt({
+      kind: "flight_order_create_instant",
+      status: "confirmed",
+      network: "duffel",
+      chainId: CHAIN_ID,
+      title: `Flight booked ${order.booking_reference ?? order.id}`,
+      summary: `${order.total_amount} ${order.total_currency} — ${order.passengers.map((p) => `${p.given_name} ${p.family_name}`).join(", ")}`,
+      result: order,
+    });
+    return text({ order: summarizeOrder(order), receipt, raw: order });
+  },
+);
+
+server.tool(
+  "flight_order_get",
+  "Get a Duffel order by id.",
+  { orderId: z.string().min(1) },
+  async ({ orderId }) => {
+    const order = await duffelGetOrder(orderId);
+    return text({ order: summarizeOrder(order), raw: order });
+  },
+);
+
+server.tool(
+  "flight_order_list",
+  "List Duffel orders (optionally filter to those awaiting payment).",
+  {
+    limit: z.number().int().positive().max(200).optional(),
+    awaitingPayment: z.boolean().optional(),
+  },
+  async ({ limit, awaitingPayment }) => {
+    const orders = await duffelListOrders({ limit, awaitingPayment });
+    return text({ orders: orders.map(summarizeOrder) });
+  },
+);
+
+server.tool(
+  "flight_order_pay",
+  "Pay a held Duffel order using Duffel balance.",
+  {
+    orderId: z.string().min(1),
+    amount: z.string().min(1),
+    currency: z.string().min(3),
+    paymentType: z.enum(["balance", "arc_bsp_cash"]).optional(),
+    confirm: z.literal("PAY_FLIGHT_ORDER"),
+  },
+  async ({ orderId, amount, currency, paymentType }) => {
+    const result = await duffelPayOrder({ orderId, amount, currency: currency.toUpperCase(), type: paymentType });
+    return text({ result });
+  },
+);
+
+server.tool(
+  "flight_order_cancel",
+  "Initiate cancellation for a Duffel order. Returns a cancellation object — confirm with flight_order_cancel_confirm to actually cancel.",
+  { orderId: z.string().min(1), confirm: z.literal("INITIATE_FLIGHT_CANCEL") },
+  async ({ orderId }) => text({ cancellation: await duffelCancelOrder(orderId) }),
+);
+
+server.tool(
+  "flight_order_cancel_confirm",
+  "Confirm a pending Duffel order cancellation by cancellation id.",
+  { cancellationId: z.string().min(1), confirm: z.literal("CONFIRM_FLIGHT_CANCEL") },
+  async ({ cancellationId }) => text({ result: await duffelConfirmCancellation(cancellationId) }),
+);
+
+server.tool(
+  "flight_ota_nowpayments_track",
+  "Track a flight purchased through a crypto-accepting OTA (Travala web, Alternative Airlines, CheapAir, etc.) that is being paid via NOWPayments. Polls nowpayments_payment_status and writes a local receipt linking the booking metadata.",
+  {
+    paymentId: z.string().min(1).describe("NOWPayments payment_id from the OTA checkout."),
+    ota: z.string().min(1).describe("OTA name, e.g. 'travala', 'alternative-airlines', 'cheapair'."),
+    route: z.string().min(1).describe("Free-text route summary, e.g. 'YKA-LAX 2026-06-15'."),
+    passenger: z.string().min(1),
+    profileIdReference: z.string().optional().describe("Optional profile id used for the booking, for cross-reference only."),
+    notes: z.string().optional(),
+  },
+  async ({ paymentId, ota, route, passenger, profileIdReference, notes }) => {
+    const payment = await nowpaymentsGetPayment(paymentId);
+    const receipt = await addReceipt({
+      kind: "flight_ota_nowpayments_track",
+      status: payment.payment_status === "finished" ? "confirmed" : "submitted",
+      network: `${ota}+nowpayments`,
+      chainId: CHAIN_ID,
+      title: `Flight: ${route}`,
+      summary: `${passenger} via ${ota}; NOWPayments ${paymentId} status=${payment.payment_status}`,
+      result: { ota, route, passenger, profileIdReference, notes, payment },
+    });
+    return text({
+      ota,
+      route,
+      passenger,
+      payment,
+      receipt,
+      warning: "Confirmation + ticket delivery come from the OTA by email. Refunds + changes go through the OTA, not NOWPayments.",
+    });
+  },
+);
+
+server.tool(
+  "travala_flight_capability_probe",
+  "Call tools/list on Travala's hosted MCP and report whether flight tools are exposed yet (today: hotels-only).",
+  {},
+  async () => {
+    const tools = await travalaListTools();
+    const flightTools = tools.filter((t) => /flight|airline|airfare|ticket/i.test(t.name) || /flight|airline/i.test(t.description ?? ""));
+    return text({
+      travalaMcpUrl: travalaMcpUrl(),
+      totalTools: tools.length,
+      toolNames: tools.map((t) => t.name),
+      flightTools,
+      flightToolsAvailable: flightTools.length > 0,
+      note: flightTools.length === 0
+        ? "No flight tools detected on Travala's hosted MCP. Travala still books flights on their website; combine flight_ota_nowpayments_track with a Travala web checkout to pay in crypto today."
+        : `Found ${flightTools.length} flight tool(s). They can be called via travala_proxy_call.`,
+    });
+  },
+);
+
 
 // ---------------------------------------------------------------------------
 // Travala (P14.5) — pay-side wrappers around Travala's hosted MCP server.

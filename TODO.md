@@ -599,8 +599,23 @@ Scope: encrypted local PII store so the agent doesn't have to re-type legal name
 - [x] **MCP** `travala_book_pay` accepts `profileId` and pulls customer fields from the encrypted profile; explicit `customer` fields still override per-call.
 - [x] **MCP** Smoke tests: encryption round-trip, redaction (raw passport never appears in stored or list output), update preserves untouched fields, customer-field mapping rules.
 - [x] **MCP** Docs: `docs/EXTERNAL_COMMERCE.md` "Secure traveler profiles" section with full schema, redaction example, and booking integration.
-- [ ] **MCP** Future: passport + DOB pass-through to flight connectors once a flight booking path lands (Travala MCP today is hotels-only).
-- [ ] **MCP** Future: KTN / TSA PreCheck / Global Entry pass-through for airline connectors.
+- [x] **MCP** Passport + DOB + FF pass-through wired into the Duffel flight connector via `passengerProfiles` (see P16).
+- [ ] **MCP** Future: KTN / TSA PreCheck / Global Entry pass-through for airline connectors (stored in profile today, not yet sent on the wire).
+
+## P16: Flight Connectors
+
+Scope: get the agent as close to autonomous flight booking as today's vendor surface allows. No public flight API natively accepts crypto, so we land three complementary paths.
+
+- [x] **MCP** Duffel connector (`src/duffel.ts`): encrypted token store, test/live declared environment, `Duffel-Version: v2` REST wrapper, typed offer/order shapes, summarizers.
+- [x] **MCP** Search + browse: `flight_search` (POST `offer_requests` + GET `offers`), `flight_offer_get`, `flight_seat_maps`.
+- [x] **MCP** Book: `flight_order_create_hold` (no immediate payment), `flight_order_create_instant` (Duffel balance), `flight_order_pay` (pay a held order), `flight_order_cancel` + `flight_order_cancel_confirm`, `flight_order_get`, `flight_order_list`.
+- [x] **MCP** Profile pass-through: `passengerProfiles` array on order tools pulls given/family name, gender, DOB, email, phone, passport (latest-expiring matching `preferredPassportCountry`), and loyalty programmes from encrypted profiles. Smoke tests cover multi-passport selection and `includePassport: false`.
+- [x] **MCP** Crypto-checkout interim: `flight_ota_nowpayments_track` mirrors the Coinsbee pattern for paying through a crypto-accepting OTA's web checkout (Travala / Alternative Airlines / CheapAir).
+- [x] **MCP** Future-readiness probe: `travala_flight_capability_probe` calls `tools/list` on Travala's hosted MCP and surfaces flight tools the moment they ship.
+- [x] **MCP** Docs: `docs/EXTERNAL_COMMERCE.md` "Flight connectors" section with the search → offer → hold → pay flow + the OTA-via-NOWPayments alternative + honest gaps.
+- [ ] **MCP** Future: KTN / Global Entry pass-through on the Duffel passenger object (Duffel supports KTN on some carriers; needs schema extension on the order tool).
+- [ ] **MCP** Future: live Duffel sandbox integration test gated by `LYTH_MCP_LIVE_DUFFEL_TEST=1` + a real test-mode access token.
+- [ ] **MCP** Future: a crypto-payment shim — once a Duffel x402/USDC payment path exists (or a partner OTA exposes one), wire it through `x402_pay` so the agent can complete instant bookings in crypto.
 
 ## Suggested Build Order
 
@@ -616,6 +631,7 @@ Scope: encrypted local PII store so the agent doesn't have to re-type legal name
 10. **Make emergency/security legible.** G3, checkpoint, bridge freeze, recovery, research-gate status.
 11. **Make external commerce reachable.** EVM hot wallet + ERC-20 builders + x402 + NOWPayments sandbox + Travala-via-peer-MCP + Coinsbee interim. Sandbox-first; production switch is an explicit gate.
 12. **Make travel painless.** Secure traveler profiles supply customer fields to vendor bookings without the agent re-typing PII; passport / KTN / FF data is stored encrypted for the day flight connectors land.
+13. **Make flights bookable.** Duffel for real flight search + offer + hold + pay (fiat via Duffel balance today); OTA-via-NOWPayments for crypto-paid web checkouts; Travala flight-capability probe to detect when their MCP exposes flight tools.
 
 ## Non-Goals
 

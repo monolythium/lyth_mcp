@@ -931,6 +931,8 @@ Quick map:
 | Travala (book + pay via x402) | `travala_info`, `travala_book_pay`, `travala_book_recover`, `travala_proxy_call` |
 | Coinsbee (interim NOWPayments path) | `coinsbee_guide`, `coinsbee_via_nowpayments_track` |
 | Secure traveler profiles (encrypted PII) | `profile_create`, `profile_update`, `profile_list`, `profile_get`, `profile_reveal`, `profile_delete`, `profile_store_info` |
+| Flights via Duffel (real catalog) | `duffel_configure`, `flight_search`, `flight_offer_get`, `flight_seat_maps`, `flight_order_create_hold`, `flight_order_create_instant`, `flight_order_pay`, `flight_order_get`, `flight_order_list`, `flight_order_cancel`, `flight_order_cancel_confirm` |
+| Flights via crypto OTA + NOWPayments | `flight_ota_nowpayments_track`, `travala_flight_capability_probe` |
 | Readiness | `readiness_check gate=external_commerce` |
 
 Full walkthroughs (setup, examples, recovery, production switch checklist) live in `docs/EXTERNAL_COMMERCE.md`.

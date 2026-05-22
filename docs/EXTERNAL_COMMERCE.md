@@ -12,6 +12,7 @@ Pages:
 - [Travala](#travala)
 - [Coinsbee](#coinsbee)
 - [Secure traveler profiles](#secure-traveler-profiles)
+- [Flight connectors](#flight-connectors)
 - [Production switch checklist](#production-switch-checklist)
 
 ---
@@ -387,6 +388,154 @@ Pass `customer` alongside `profileId` to override specific fields per booking (e
 - `LYTH_MCP_PROFILE_PASSPHRASE` (or `LYTH_MCP_WALLET_PASSPHRASE` as a fallback) lets you avoid passing it per call, but it lives in the process environment — only use it in trusted shells.
 - The local-machine key (when `allowLocalKey: true`) is just `~/.lyth_mcp/profiles.key`; protect it like an SSH private key.
 - `profile_reveal` output contains plaintext PII — never paste it into chat history or commit it.
+
+## Flight Connectors
+
+Flights are structurally different from hotels: **no public flight API natively accepts crypto today**. Travala's hosted MCP is hotels-only; the crypto-accepting flight OTAs (Travala web, Alternative Airlines, CheapAir) are web checkouts without a public booking API; the mature flight APIs (Duffel, Amadeus, Kiwi/Tequila) are fiat-only.
+
+lyth_mcp covers this with three complementary paths:
+
+| Path | Tool surface | Best for |
+|---|---|---|
+| **Duffel** (real flight catalog + booking) | `duffel_configure`, `flight_search`, `flight_offer_get`, `flight_seat_maps`, `flight_order_create_hold`, `flight_order_create_instant`, `flight_order_pay`, `flight_order_get`, `flight_order_list`, `flight_order_cancel`, `flight_order_cancel_confirm` | Test-mode prototyping today; live flight bookings (fiat-paid via Duffel balance) when you fund a Duffel account |
+| **OTA web checkout via NOWPayments** | `flight_ota_nowpayments_track` | Crypto-paying through Travala / Alternative Airlines / CheapAir web; agent tracks the NOWPayments invoice locally |
+| **Travala flight tools (when they ship)** | `travala_flight_capability_probe`, `travala_proxy_call` | Future — surfaces the moment Travala adds flight tools to their hosted MCP |
+
+### Duffel
+
+Sign up at <https://duffel.com> and grab a Test Mode access token. Test mode is free, uses simulated airlines, and exercises every endpoint end-to-end.
+
+```text
+duffel_configure
+  confirm             = "CONFIGURE_DUFFEL"
+  declaredEnvironment = "test"           # switch to "live" only when intentional
+  accessToken         = "duffel_test_..."
+  defaultCurrency     = "USD"            # optional
+```
+
+The token type (test vs live) — not a URL — determines whether resources are simulated.
+
+### Search
+
+```text
+flight_search
+  slices = [
+    { origin: "YKA", destination: "LAX", departureDate: "2026-06-15" },
+    { origin: "LAX", destination: "YKA", departureDate: "2026-06-22" }
+  ]
+  passengers     = [{ type: "adult" }]
+  cabinClass     = "economy"
+  maxConnections = 1
+  sort           = "total_amount"
+  limit          = 30
+```
+
+Returns an `offerRequestId`, a `passengers` array with assigned ids (e.g. `pas_00009...`), and offer summaries. Fetch the full offer (with seats + bag services) with `flight_offer_get(offerId, withServices: true)`.
+
+### Book — explicit passengers
+
+```text
+flight_order_create_hold
+  confirm    = "CREATE_FLIGHT_HOLD"
+  offerId    = "off_..."
+  passengers = [{
+    id:           "pas_00009...",      # from flight_search
+    type:         "adult",
+    givenName:    "Nayiem",
+    familyName:   "Willems",
+    gender:       "m",
+    bornOn:       "1990-01-15",
+    email:        "tickets@example.com",
+    phoneNumber:  "+15555550101",
+    passport:     { number: "AB1234567", expiresOn: "2030-06-01", issuingCountryCode: "CA" },
+    loyaltyProgrammes: [{ airlineIataCode: "AC", accountNumber: "AC123" }]
+  }]
+```
+
+### Book — pass passengers from secure profiles
+
+```text
+flight_order_create_hold
+  confirm = "CREATE_FLIGHT_HOLD"
+  offerId = "off_..."
+  passengerProfiles = [{
+    passengerId:              "pas_00009...",
+    profileId:                "nayiem",
+    type:                     "adult",
+    preferredPassportCountry: "CA"
+  }]
+```
+
+The mapping uses [secure traveler profiles](#secure-traveler-profiles):
+
+- `given_name`        ← `preferredName ?? legalFirstName`
+- `family_name`       ← `legalLastName`
+- `gender`            ← `gender` (normalized to `m` / `f`)
+- `born_on`           ← `dateOfBirth`
+- `email`             ← `ticketDeliveryEmail ?? contact.email`
+- `phone_number`      ← `contact.phone`
+- `identity_documents[0]` ← latest-expiring passport matching `preferredPassportCountry`, falling back to the latest-expiring of any country
+- `loyalty_programme_accounts` ← all `frequentFlyerNumbers`
+
+Pass `includePassport: false` for domestic legs that don't require passport. Mix explicit `passengers` + `passengerProfiles` in the same call (e.g. one profile-bound adult + one infant supplied inline).
+
+### Pay or cancel
+
+Held orders sit at Duffel until `payment_required_by`. Pay later with `flight_order_pay`:
+
+```text
+flight_order_pay
+  confirm     = "PAY_FLIGHT_ORDER"
+  orderId     = "ord_..."
+  amount      = "543.20"
+  currency    = "USD"
+  paymentType = "balance"          # default; uses your Duffel balance
+```
+
+For instant booking (skipping the hold):
+
+```text
+flight_order_create_instant
+  confirm  = "CREATE_FLIGHT_INSTANT"
+  offerId  = "off_..."
+  amount   = "543.20"
+  currency = "USD"
+  passengerProfiles = [{ passengerId: "pas_...", profileId: "nayiem" }]
+```
+
+Cancel:
+
+```text
+flight_order_cancel          confirm = "INITIATE_FLIGHT_CANCEL"  orderId = "ord_..."
+flight_order_cancel_confirm  confirm = "CONFIRM_FLIGHT_CANCEL"   cancellationId = "ore_..."
+```
+
+Listing + status: `flight_order_list awaitingPayment=true` and `flight_order_get orderId=...`.
+
+### Crypto checkout via NOWPayments (interim flights)
+
+For paying flights through a crypto-accepting OTA's website checkout:
+
+```text
+flight_ota_nowpayments_track
+  paymentId          = "<NOWPayments payment_id from the OTA>"
+  ota                = "travala"            # or "alternative-airlines", "cheapair", etc.
+  route              = "YKA-LAX 2026-06-15"
+  passenger          = "Nayiem Willems"
+  profileIdReference = "nayiem"              # optional, for cross-referencing
+```
+
+Code retrieval / e-tickets come from the OTA by email — the agent can't auto-fetch them without mailbox access. Refunds + changes go through the OTA.
+
+### Travala flight-capability probe
+
+`travala_flight_capability_probe` calls `tools/list` on Travala's hosted MCP and reports whether any flight tools have shipped. When they do, `travala_proxy_call` forwards arbitrary tool calls to them. Today Travala's MCP is hotels-only.
+
+### Honest gaps
+
+- **Crypto-native flight API**: still none. Duffel is the API; pay-in-crypto is OTA-web-checkout-only until a connector emerges.
+- **Refunds**: Duffel cancellations follow airline fare rules. OTA-via-NOWPayments refunds are out-of-band (OTA support).
+- **Multi-traveler optimization**: an `add_passenger_to_profile` / `family_profile` shortcut isn't built yet — for multi-pax bookings, you bind one profile per `passengerId` in the same call.
 
 ## Production Switch Checklist
 

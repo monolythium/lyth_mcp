@@ -570,6 +570,37 @@ assert(revealedPatched.passports?.[0]?.number === "AB1234567", "update must pres
 const customer2 = profiles.customerFieldsFromProfile(revealedPatched);
 assert(customer2.firstName === "Smokey", "customer firstName must prefer preferredName when present");
 
+// Duffel passenger mapping (offline; doesn't hit the Duffel API)
+const duffel = await import("../dist/duffel.js");
+const duffelPassenger = duffel.duffelPassengerFromProfile({
+  profile: revealedPatched,
+  passengerId: "pas_smoke_0001",
+});
+assert(duffelPassenger.id === "pas_smoke_0001", "passenger id passes through");
+assert(duffelPassenger.given_name === "Smokey", "given_name uses preferredName");
+assert(duffelPassenger.family_name === "Tester", "family_name uses legalLastName");
+assert(duffelPassenger.email === "tickets@example.com", "email prefers ticketDeliveryEmail");
+assert(duffelPassenger.born_on === "1990-01-15", "born_on uses dateOfBirth");
+assert(duffelPassenger.identity_documents?.[0]?.unique_identifier === "AB1234567", "passport pass-through");
+assert(duffelPassenger.identity_documents?.[0]?.issuing_country_code === "CA", "passport country uppercased");
+assert(duffelPassenger.loyalty_programme_accounts?.[0]?.airline_iata_code === "AC", "FF airline pass-through");
+
+// Multi-passport: prefer matching country, then latest expiry
+const multiProfile = {
+  ...revealedPatched,
+  passports: [
+    { number: "OLDOLDOLD", countryOfIssue: "CA", expiresOn: "2025-01-01" },
+    { number: "NEWNEWNEW", countryOfIssue: "CA", expiresOn: "2032-01-01" },
+    { number: "USAUSAUSA", countryOfIssue: "US", expiresOn: "2031-01-01" },
+  ],
+};
+const pickLatestCa = duffel.duffelPassengerFromProfile({ profile: multiProfile, passengerId: "p1", preferredPassportCountry: "CA" });
+assert(pickLatestCa.identity_documents?.[0]?.unique_identifier === "NEWNEWNEW", "should pick latest-expiring matching-country passport");
+const pickUs = duffel.duffelPassengerFromProfile({ profile: multiProfile, passengerId: "p1", preferredPassportCountry: "US" });
+assert(pickUs.identity_documents?.[0]?.unique_identifier === "USAUSAUSA", "should pick US passport when preferred");
+const skipPassport = duffel.duffelPassengerFromProfile({ profile: multiProfile, passengerId: "p1", includePassport: false });
+assert(skipPassport.identity_documents === undefined, "includePassport:false must omit passport");
+
 await profiles.deleteProfile("smoke-profile", "smoke-profile");
 const after = await profiles.listProfiles();
 assert(after.find((p) => p.id === "smoke-profile") === undefined, "delete must remove the profile");
@@ -604,6 +635,11 @@ console.log(JSON.stringify({
   nowpaymentsIpnRejectOk: badVerify.valid === false,
   profileRedactionOk: profileSummary.redacted.passports?.[0]?.last4 === "4567",
   profileCustomerMappingOk: customer2.firstName === "Smokey" && customer2.email === "tickets@example.com",
+  duffelPassengerMappingOk:
+    duffelPassenger.email === "tickets@example.com" &&
+    duffelPassenger.identity_documents?.[0]?.unique_identifier === "AB1234567" &&
+    pickLatestCa.identity_documents?.[0]?.unique_identifier === "NEWNEWNEW" &&
+    pickUs.identity_documents?.[0]?.unique_identifier === "USAUSAUSA",
 }, null, 2));
 
 async function startMockRpc() {

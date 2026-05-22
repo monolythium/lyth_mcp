@@ -184,3 +184,7 @@ export async function travalaBookStatus(args) {
 export async function travalaProxyCall(args) {
     return travalaCallTool(args.tool, args.args);
 }
+export async function travalaListTools() {
+    const result = await mcpJsonRpc(travalaMcpUrl(), "tools/list", {});
+    return Array.isArray(result.tools) ? result.tools : [];
+}
