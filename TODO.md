@@ -512,6 +512,84 @@ Whitepaper refs: §18, §22, §24.2, §26, §27, §29.5, §99.8.
   - Live testnet smoke tests gated by env.
   - Golden runbook fixtures.
 
+## P14: External Commerce, EVM Hot Wallet, And x402
+
+Whitepaper refs: §10, §18, §24, §26, §27.7. Out-of-band refs: NOWPayments REST + IPN, Travala MCP (`https://travel-mcp.travala.com/mcp`) + x402 payment protocol, ERC-8004 agent identity registry on Base, Coinsbee partner API (gated).
+
+Scope: let the agent reach mainstream crypto-commerce vendors (NOWPayments-accepting merchants, Travala, Coinsbee) by adding (a) an ERC-20 hot-wallet primitive that mirrors the existing PQM-1 agent-wallet guardrails, (b) an x402 client so any x402-priced HTTP resource can be paid autonomously, and (c) thin connectors that delegate vendor catalog/booking to upstream APIs while lyth_mcp keeps custody of the wallet, policy, outbox, and receipts.
+
+Non-goals: do not become a custody wallet for these chains; do not silently raise EVM caps; do not fabricate endpoints for partner-gated APIs.
+
+### P14.0 — EVM hot wallet primitive
+
+- [x] **MCP WALLET** Add secp256k1 agent hot wallets, scoped per agent, encrypted at rest with the same key-protection model as PQM-1 wallets.
+  - Tools: `evm_wallet_create`, `evm_wallet_import`, `evm_wallet_list`, `evm_wallet_get`, `evm_wallet_limits`, `evm_wallet_pause`, `evm_wallet_drain_draft`, `evm_wallet_delete`, `evm_wallet_fund_request`, `evm_wallet_export_private_key`, `evm_wallet_store_info`.
+  - Captures purpose, allowed chains, per-tx + daily caps per (chain, asset), allowed counterparties/categories, expiry, fallback approval mode.
+  - Explicitly low-value operating wallets, never custody (warned on creation).
+- [x] **MCP** First-cut chains: **Ethereum mainnet + Base** (defaults). Polygon, Arbitrum, Optimism configurable.
+- [x] **MCP** RPC config per chain with health/latency probes (`evm_rpc_health`, `LYTH_MCP_EVM_RPC_<chainId>` override).
+- [x] **MCP** Funding flow mirrors LYTH path: `evm_wallet_fund_request` issues a draft for principal-wallet approval; agent cannot raise its own limits or refill itself.
+
+### P14.1 — ERC-20 transfer, gas, and allowance builders
+
+- [x] **MCP** Native ETH transfer builder (`evm_native_transfer`) with EIP-1559 fee quote, preflight (balance ≥ amount + gas, nonce current, chain id match) and outbox+receipt persistence.
+- [x] **MCP** ERC-20 transfer builder (`erc20_transfer`); canonical token registry seeded with USDC on Ethereum + Base and USDT on Ethereum (issuer-published).
+- [x] **MCP** ERC-20 allowance tools: `erc20_allowance`, `erc20_approve` (exact-amount default, not unlimited).
+- [x] **MCP** Outbox uses existing `eth_raw` kind; status `signed → submitted → confirmed → failed`; broadcast gated by `LYTH_MCP_ENABLE_EVM_SUBMIT=1`.
+- [x] **MCP** Plain-English summaries baked into the response (fee gwei, ETH cost, balance preflight, sufficiency flags).
+- [x] **MCP** Policy guard: low-value caps apply per (agent, chain, asset). Private LYTH cordon untouched (EVM assets are public-only).
+
+### P14.2 — x402 payment client
+
+- [x] **MCP** Generic `x402_pay` — HTTP 402 → parse `accepts` → policy check → sign EIP-3009 `TransferWithAuthorization` (EIP-712) → retry with `X-PAYMENT` header → return final response and `x-payment-response` settlement metadata.
+- [x] **MCP** Per-vendor policy (`x402_vendor_policy_set/list/get/remove`): origin allowlist, allowed assets, per-(chain,asset) caps in atomic units, wallet binding.
+- [x] **MCP** Idempotency: each paid attempt writes an outbox entry tagging the vendor/resource/headerB64; supports `dryRun` for plan-only.
+- [ ] **MCP** Surface in `mcp_self_check`: still TODO — expose x402 supported schemes + configured wallet in the self-check tool.
+
+### P14.3 — ERC-8004 agent identity
+
+- [x] **MCP** `agent_identity_set_local` + `agent_identity_get` write agentId + rewardWallet to a local config consumed by Travala bridge tools.
+- [x] **MCP** `agent_identity_register_guide` documents the 8004scan.io UI path.
+- [ ] **MCP CORE-EXT** `agent_identity_register_draft` — gated on a verified Base-mainnet IdentityRegistry contract address. Reference impl exists on Ethereum Sepolia (ChaosChain/trustless-agents-erc-ri, Jan 2026 spec) but no Base-mainnet address is published; do not fabricate.
+
+### P14.4 — NOWPayments connector (reference)
+
+- [x] **MCP** Dedicated connector module (encrypted local config; sandbox/prod base toggle, `x-api-key`, optional IPN secret + callback URL): `nowpayments_configure`, `nowpayments_status`, `nowpayments_currencies`, `nowpayments_merchant_coins`.
+- [x] **MCP** Catalog/quote: `nowpayments_estimate`.
+- [x] **MCP** Order: `nowpayments_payment_create` (deposit address) and `nowpayments_invoice_create` (hosted page); both produce a local receipt.
+- [x] **MCP** Status + reconciliation: `nowpayments_payment_status`, `nowpayments_payment_list`, `nowpayments_ipn_verify` (HMAC-SHA512, alphabetically sorted JSON keys), `nowpayments_config_redacted`.
+- [x] **MCP** Refund: `nowpayments_refund_draft` (support-mediated, flagged as manual).
+- [x] **MCP** Sandbox is the default environment; production requires explicit env switch + warning.
+- [ ] **MCP** Full live demo flow (estimate → payment → IPN → receipt) against the NOWPayments sandbox is exercised manually; smoke tests cover offline path (signature canonicalization + verify + reject).
+
+### P14.5 — Travala via peer MCP + x402
+
+- [x] **MCP** Documented integration shape via `travala_info` (Travala's hosted MCP URL + the agent-identity wiring + Base USDC payment path).
+- [x] **MCP** Booking helpers owned by lyth_mcp:
+  - `travala_book_pay` — calls `travala_book` on Travala's MCP, parses x402 instructions from the tool result (structured + text content + paymentUrl flavors), invokes `x402_pay` with the configured Base USDC wallet, attaches `agentId` + `rewardWallet` from local identity config (override per-call supported), polls `travala_book_status` to materialize the booking, persists outbox + receipt.
+  - `travala_book_recover` — wraps `travala_book_status` for outbox reconciliation.
+- [x] **MCP** Thin proxy: `travala_proxy_call` forwards arbitrary read-only tool calls (`travala_search_hotel`, `travala_search_package`, `travala_manage_bookings`, `travala_cancel_booking`) so a single MCP client config can talk to both.
+- [x] **MCP** Pre-booking risk surfaced through the standard `risk_explain` plumbing and the receipt-attached summary.
+- [ ] **MCP** Live verification of Travala's exact response shape (the parser handles three known flavors; once a live booking confirms the wire format, prune unused branches).
+
+### P14.6 — Coinsbee (partnership-gated + interim path)
+
+- [x] **MCP** Interim path: `coinsbee_guide` documents the manual flow (open Coinsbee, choose a card, get a NOWPayments invoice, pay from the EVM agent wallet) and `coinsbee_via_nowpayments_track` ties the NOWPayments payment to a local Coinsbee receipt.
+- [x] **MCP** Geographic/brand-restriction warnings rendered in the guide and tracking receipt.
+- [ ] **MCP** Direct Coinsbee reseller connector — TODO(partnership). No tools added until BD returns real specs.
+
+### P14.7 — Demo / dry-run + tests
+
+- [x] **MCP** Demo connector templates already exist; NOWPayments sandbox + x402 path documented via the new tools.
+- [x] **MCP** Smoke tests cover offline path: EVM wallet create + cap enforcement + key derivation, EIP-1559 envelope shape vs. known test vector, ERC-20 transfer calldata, x402 mock server end-to-end with success + origin-rejection + cap-rejection branches, NOWPayments IPN verify (good + bad).
+- [ ] **MCP** Live sandbox integration tests gated by env (`LYTH_MCP_LIVE_NOWPAYMENTS_SANDBOX=1`, real Base RPC, etc.) — still TODO; current suite stays fully offline.
+- [x] **MCP** README pages: `docs/EXTERNAL_COMMERCE.md` covers external-commerce setup, EVM hot wallet & funding, x402 + ERC-8004 identity, NOWPayments, Travala, Coinsbee, and the production switch checklist. Linked from `README.md`.
+
+### P14.8 — Readiness gates (extends P13)
+
+- [x] **MCP** Added `external_commerce` gate to `readiness_check` covering EVM wallet, ERC-20 builders, x402 client, NOWPayments IPN, Travala bridge tools, and ERC-8004 config; surfaces gaps (live broadcast off by default, ERC-8004 on-chain registration gated, Coinsbee direct API gated).
+- [ ] **MCP** Production switch (sandbox → live) policy: principal-wallet-signed approval + empty outbox + caps explicitly set + working `mcp_self_check` is documented in the gate description; an enforcing tool (`evm_submit_enable_draft`) is still TODO.
+
 ## Suggested Build Order
 
 1. **Make payments reliable.** Outbox, preflight, receipts, node health, status watcher.
@@ -524,6 +602,7 @@ Whitepaper refs: §18, §22, §24.2, §26, §27, §29.5, §99.8.
 8. **Make contract tooling real.** MRV validation, deploy/call/read/events.
 9. **Make operator tooling useful.** Cluster registry, service tiers, staking/autovote.
 10. **Make emergency/security legible.** G3, checkpoint, bridge freeze, recovery, research-gate status.
+11. **Make external commerce reachable.** EVM hot wallet + ERC-20 builders + x402 + NOWPayments sandbox + Travala-via-peer-MCP + Coinsbee interim. Sandbox-first; production switch is an explicit gate.
 
 ## Non-Goals
 

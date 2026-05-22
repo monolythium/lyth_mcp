@@ -209,6 +209,71 @@ import {
   explainWalletThresholds,
   simulateHotWalletPolicy,
 } from "./wallet_safety.js";
+import {
+  checkEvmCap,
+  configureEvmLowValuePolicy,
+  createEvmWallet,
+  deleteEvmWallet,
+  draftEvmDrain,
+  draftEvmFundingRequest,
+  EVM_CHAINS,
+  evmWalletStoreInfo,
+  exportEvmPrivateKey,
+  getEvmWallet,
+  importEvmWallet,
+  isAddress as isEvmAddress,
+  listEvmWallets,
+  moveEvmAccounting,
+  pauseEvmWallet,
+  reserveEvmCap,
+  updateEvmAgentMetadata,
+  type EvmCap,
+  type EvmWalletSummary,
+} from "./evm_wallet.js";
+import {
+  buildErc20Approve,
+  buildErc20Transfer,
+  buildEvmNativeTransfer,
+  evmTokenInfo,
+  isEvmSubmitEnabled,
+  probeEvmEndpoints,
+  readErc20Allowance,
+  evmRpcEndpoints,
+} from "./evm_tx.js";
+import { listEvmTokens } from "./evm_tokens.js";
+import {
+  x402Pay,
+  type X402VendorPolicy,
+  chainIdToX402Network,
+} from "./x402.js";
+import {
+  getX402Policy,
+  listX402Policies,
+  readAgentIdentity,
+  removeX402Policy,
+  upsertX402Policy,
+  writeAgentIdentity,
+} from "./x402_store.js";
+import {
+  travalaBookPay,
+  travalaBookStatus,
+  travalaMcpUrl,
+  travalaProxyCall,
+} from "./travala.js";
+import {
+  configureNowpayments,
+  nowpaymentsCreateInvoice,
+  nowpaymentsCreatePayment,
+  nowpaymentsCurrencies,
+  nowpaymentsEstimate,
+  nowpaymentsGetPayment,
+  nowpaymentsListPayments,
+  nowpaymentsMerchantCoins,
+  nowpaymentsRedactedConfig,
+  nowpaymentsRefundDraft,
+  nowpaymentsStatus,
+  verifyNowpaymentsIpn,
+} from "./nowpayments.js";
 
 const DEFAULT_CHAIN_ID = 69420;
 const DEFAULT_NETWORK = "testnet-69420";
@@ -1703,6 +1768,49 @@ const MCP_TOOL_NAMES = [
   "agent_wallet_pause",
   "agent_wallet_drain",
   "agent_wallet_delete",
+  "evm_wallet_create",
+  "evm_wallet_import",
+  "evm_wallet_list",
+  "evm_wallet_get",
+  "evm_wallet_limits",
+  "evm_wallet_pause",
+  "evm_wallet_drain_draft",
+  "evm_wallet_delete",
+  "evm_wallet_fund_request",
+  "evm_wallet_export_private_key",
+  "evm_wallet_store_info",
+  "evm_rpc_health",
+  "evm_token_list",
+  "evm_native_transfer",
+  "erc20_transfer",
+  "erc20_approve",
+  "erc20_allowance",
+  "x402_vendor_policy_set",
+  "x402_vendor_policy_list",
+  "x402_vendor_policy_get",
+  "x402_vendor_policy_remove",
+  "x402_pay",
+  "agent_identity_set_local",
+  "agent_identity_get",
+  "agent_identity_register_guide",
+  "nowpayments_configure",
+  "nowpayments_status",
+  "nowpayments_currencies",
+  "nowpayments_merchant_coins",
+  "nowpayments_estimate",
+  "nowpayments_payment_create",
+  "nowpayments_invoice_create",
+  "nowpayments_payment_status",
+  "nowpayments_payment_list",
+  "nowpayments_refund_draft",
+  "nowpayments_ipn_verify",
+  "nowpayments_config_redacted",
+  "travala_info",
+  "travala_proxy_call",
+  "travala_book_pay",
+  "travala_book_recover",
+  "coinsbee_guide",
+  "coinsbee_via_nowpayments_track",
   "vendor_search",
   "provider_onboarding_draft",
   "order_create",
@@ -2660,6 +2768,1122 @@ server.tool(
     });
     return text({ ...result, receipt });
   },
+);
+
+// ---------------------------------------------------------------------------
+// EVM hot wallet (P14.0)
+// Separate, low-value EVM operating wallets (secp256k1) for paying external
+// crypto-commerce vendors (NOWPayments, Travala via x402, etc.). Never custody.
+// ---------------------------------------------------------------------------
+
+const EvmCapSchema = z.object({
+  chainId: z.number().int().positive(),
+  asset: z.string().min(1),
+  maxPerTx: z.string().min(1),
+  dailyLimit: z.string().optional(),
+});
+
+const EvmAgentSchema = z.object({
+  purpose: z.string().min(1),
+  maxBalance: z.string().optional(),
+  allowedCounterparties: z.array(z.string()).optional(),
+  allowedCategories: z.array(z.string()).optional(),
+  expiresAt: z.string().optional(),
+  fallbackApproval: z.enum(["passphrase", "wallet_handoff", "deny"]).optional(),
+});
+
+function compactEvmWallet(wallet: EvmWalletSummary) {
+  return {
+    name: wallet.name,
+    address: wallet.address,
+    algorithm: wallet.algorithm,
+    keyProtection: wallet.keyProtection,
+    createdAt: wallet.createdAt,
+    allowedChainIds: wallet.allowedChainIds,
+    allowedChainNames: wallet.allowedChainIds.map((id) => EVM_CHAINS[id]?.name ?? `chain-${id}`),
+    allowedAssets: wallet.allowedAssets,
+    agent: wallet.agent,
+    lowValue: wallet.lowValue,
+  };
+}
+
+server.tool(
+  "evm_wallet_create",
+  "Create an explicit low-value EVM agent operating wallet (secp256k1). For paying external crypto-commerce vendors only — never custody.",
+  {
+    name: z.string().min(1),
+    confirm: z.literal("CREATE_EVM_WALLET"),
+    allowedChainIds: z.array(z.number().int().positive()).optional().describe("Default: [1 (Ethereum), 8453 (Base)]."),
+    allowedAssets: z.array(z.string()).optional().describe("Default: [ETH, USDC, USDT]."),
+    agent: EvmAgentSchema,
+    lowValueCaps: z.array(EvmCapSchema).optional().describe("Per-(chain,asset) maxPerTx and dailyLimit caps."),
+    passphrase: z.string().optional(),
+    allowLocalKey: z.boolean().optional().describe("Allow local-machine-key protection for low-value mode. Default false."),
+    revealPrivateKey: z.boolean().optional(),
+    overwrite: z.boolean().optional(),
+  },
+  async ({ name, allowedChainIds, allowedAssets, agent, lowValueCaps, passphrase, allowLocalKey, revealPrivateKey, overwrite }) => {
+    const wallet = await createEvmWallet({
+      name,
+      passphrase,
+      allowLocalKey,
+      allowedChainIds,
+      allowedAssets,
+      agent: { ...agent, paused: false },
+      lowValue: lowValueCaps && lowValueCaps.length > 0 ? { enabled: true, caps: lowValueCaps as EvmCap[] } : undefined,
+      revealPrivateKey,
+      overwrite,
+    });
+    const receipt = await addReceipt({
+      kind: "evm_wallet_create",
+      status: "confirmed",
+      network: NETWORK,
+      chainId: CHAIN_ID,
+      title: `Created EVM agent wallet ${name}`,
+      summary: `${name} (${wallet.address}) for ${agent.purpose}`,
+      walletName: name,
+      from: wallet.address,
+      result: compactEvmWallet(wallet),
+    });
+    return text({
+      wallet: compactEvmWallet(wallet),
+      privateKey: wallet.privateKey,
+      fundingAddress: wallet.address,
+      storePath: wallet.storePath,
+      receipt,
+      warning:
+        "This is an explicitly authorized low-value EVM hot wallet. Fund it only with the operating budget approved for this purpose. ERC-20 + x402 builders land in P14.1 / P14.2.",
+    });
+  },
+);
+
+server.tool(
+  "evm_wallet_import",
+  "Import an existing secp256k1 private key into a new low-value EVM agent wallet.",
+  {
+    name: z.string().min(1),
+    confirm: z.literal("IMPORT_EVM_WALLET"),
+    privateKey: z.string().describe("0x-prefixed 32-byte hex private key."),
+    allowedChainIds: z.array(z.number().int().positive()).optional(),
+    allowedAssets: z.array(z.string()).optional(),
+    agent: EvmAgentSchema,
+    passphrase: z.string().optional(),
+    allowLocalKey: z.boolean().optional(),
+    overwrite: z.boolean().optional(),
+  },
+  async ({ name, privateKey, allowedChainIds, allowedAssets, agent, passphrase, allowLocalKey, overwrite }) => {
+    const wallet = await importEvmWallet({
+      name,
+      privateKey,
+      allowedChainIds,
+      allowedAssets,
+      agent: { ...agent, paused: false },
+      passphrase,
+      allowLocalKey,
+      overwrite,
+    });
+    const receipt = await addReceipt({
+      kind: "evm_wallet_import",
+      status: "confirmed",
+      network: NETWORK,
+      chainId: CHAIN_ID,
+      title: `Imported EVM agent wallet ${name}`,
+      summary: `${name} (${wallet.address}) for ${agent.purpose}`,
+      walletName: name,
+      from: wallet.address,
+      result: compactEvmWallet(wallet),
+    });
+    return text({ wallet: compactEvmWallet(wallet), receipt });
+  },
+);
+
+server.tool(
+  "evm_wallet_list",
+  "List local EVM agent wallets (does not expose private keys).",
+  {},
+  async () => {
+    const wallets = await listEvmWallets();
+    return text({ wallets: wallets.map(compactEvmWallet) });
+  },
+);
+
+server.tool(
+  "evm_wallet_get",
+  "Get a single EVM agent wallet by name.",
+  { name: z.string().min(1) },
+  async ({ name }) => {
+    const wallets = await listEvmWallets();
+    const wallet = wallets.find((w) => w.name === name);
+    if (!wallet) {
+      return errorText(`evm wallet '${name}' not found`);
+    }
+    return text({ wallet: compactEvmWallet(wallet) });
+  },
+);
+
+server.tool(
+  "evm_wallet_store_info",
+  "Show EVM wallet store path, count, and file mode for diagnostics.",
+  {},
+  async () => text(await evmWalletStoreInfo()),
+);
+
+server.tool(
+  "evm_wallet_limits",
+  "Update agent metadata and/or low-value caps for an EVM operating wallet.",
+  {
+    name: z.string().min(1),
+    confirm: z.literal("UPDATE_EVM_WALLET_LIMITS"),
+    lowValueCaps: z.array(EvmCapSchema).optional().describe("Replace existing per-(chain,asset) caps. Omit to leave caps unchanged."),
+    disableLowValue: z.boolean().optional().describe("When true, disable low-value mode entirely."),
+    maxBalance: z.string().optional(),
+    allowedCounterparties: z.array(z.string()).optional(),
+    allowedCategories: z.array(z.string()).optional(),
+    expiresAt: z.string().optional(),
+    fallbackApproval: z.enum(["passphrase", "wallet_handoff", "deny"]).optional(),
+  },
+  async ({ name, lowValueCaps, disableLowValue, maxBalance, allowedCounterparties, allowedCategories, expiresAt, fallbackApproval }) => {
+    if (disableLowValue) {
+      await configureEvmLowValuePolicy({ name, enabled: false });
+    } else if (lowValueCaps && lowValueCaps.length > 0) {
+      await configureEvmLowValuePolicy({ name, enabled: true, caps: lowValueCaps as EvmCap[] });
+    }
+    const wallet = await updateEvmAgentMetadata({
+      name,
+      patch: {
+        maxBalance,
+        allowedCounterparties,
+        allowedCategories,
+        expiresAt,
+        fallbackApproval,
+        paused: false,
+      },
+    });
+    const receipt = await addReceipt({
+      kind: "evm_wallet_limits",
+      status: "confirmed",
+      network: NETWORK,
+      chainId: CHAIN_ID,
+      title: `Updated EVM agent wallet limits for ${name}`,
+      summary: `${name} EVM limits updated`,
+      walletName: name,
+      result: compactEvmWallet(wallet),
+    });
+    return text({ wallet: compactEvmWallet(wallet), receipt });
+  },
+);
+
+server.tool(
+  "evm_wallet_pause",
+  "Pause an EVM agent wallet: disable low-value local signing and mark paused.",
+  { name: z.string().min(1), confirm: z.literal("PAUSE_EVM_WALLET") },
+  async ({ name }) => {
+    const wallet = await pauseEvmWallet(name);
+    const receipt = await addReceipt({
+      kind: "evm_wallet_pause",
+      status: "confirmed",
+      network: NETWORK,
+      chainId: CHAIN_ID,
+      title: `Paused EVM agent wallet ${name}`,
+      summary: `${name} EVM low-value signing disabled`,
+      walletName: name,
+      result: compactEvmWallet(wallet),
+    });
+    return text({
+      wallet: compactEvmWallet(wallet),
+      receipt,
+      warning: "Low-value EVM signing disabled. Existing signed payloads in the outbox are not automatically invalidated.",
+    });
+  },
+);
+
+server.tool(
+  "evm_wallet_delete",
+  "Delete a local EVM agent wallet record after explicit confirmation.",
+  {
+    name: z.string().min(1),
+    confirmName: z.string().min(1).describe("Must exactly equal name."),
+    confirm: z.literal("DELETE_EVM_WALLET"),
+  },
+  async ({ name, confirmName }) => {
+    const result = await deleteEvmWallet(name, confirmName);
+    const receipt = await addReceipt({
+      kind: "evm_wallet_delete",
+      status: "confirmed",
+      network: NETWORK,
+      chainId: CHAIN_ID,
+      title: `Deleted EVM agent wallet ${name}`,
+      summary: `${name} removed from local EVM wallet store`,
+      walletName: name,
+      result,
+    });
+    return text({ ...result, receipt });
+  },
+);
+
+server.tool(
+  "evm_wallet_fund_request",
+  "Draft a human-readable request to fund an EVM agent wallet for a bounded task.",
+  {
+    name: z.string().min(1),
+    chainId: z.number().int().positive().describe("Target EVM chain id (1 = Ethereum, 8453 = Base)."),
+    asset: z.string().min(1).describe("Asset symbol, e.g. ETH, USDC, USDT."),
+    amount: z.string().min(1),
+    purpose: z.string().min(1),
+    expiresAt: z.string().optional(),
+  },
+  async ({ name, chainId, asset, amount, purpose, expiresAt }) => {
+    const draft = await draftEvmFundingRequest({ name, chainId, asset, amount, purpose, expiresAt });
+    const receipt = await addReceipt({
+      kind: "evm_wallet_fund_request",
+      status: "drafted",
+      network: NETWORK,
+      chainId: CHAIN_ID,
+      title: `EVM funding request for ${name}`,
+      summary: draft.message,
+      walletName: name,
+      to: draft.recipientAddress,
+      amount,
+      asset,
+      result: draft,
+    });
+    return text({ draft, receipt });
+  },
+);
+
+server.tool(
+  "evm_wallet_drain_draft",
+  "Stub: build a drain draft from an EVM agent wallet to a destination address. Real ERC-20 + native builders land in P14.1.",
+  {
+    name: z.string().min(1),
+    chainId: z.number().int().positive(),
+    toAddress: z.string().describe("0x destination address."),
+  },
+  async ({ name, chainId, toAddress }) => {
+    if (!isEvmAddress(toAddress)) {
+      return errorText(`invalid EVM address: ${toAddress}`);
+    }
+    const draft = await draftEvmDrain({ name, chainId, toAddress });
+    return text({
+      draft,
+      warning: draft.note,
+    });
+  },
+);
+
+server.tool(
+  "evm_wallet_export_private_key",
+  "Export the secp256k1 private key for an EVM agent wallet. Requires explicit confirmation; do not paste into shared contexts.",
+  {
+    name: z.string().min(1),
+    confirm: z.literal("EXPORT_EVM_PRIVATE_KEY"),
+    passphrase: z.string().optional(),
+  },
+  async ({ name, passphrase }) => {
+    const privateKey = await exportEvmPrivateKey(name, passphrase);
+    const wallet = await getEvmWallet(name);
+    return text({
+      walletName: name,
+      address: wallet.address,
+      privateKey,
+      warning:
+        "Treat this private key as a secret. Anyone with it can spend any funds in this EVM wallet. Do not paste into chat or commit it.",
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// EVM transfer + ERC-20 builders (P14.1)
+// ---------------------------------------------------------------------------
+
+server.tool(
+  "evm_rpc_health",
+  "Probe configured EVM RPC endpoints for a chain id and report latency/sync.",
+  { chainId: z.number().int().positive() },
+  async ({ chainId }) => {
+    const endpoints = evmRpcEndpoints(chainId);
+    if (endpoints.length === 0) {
+      return errorText(`no RPC endpoints configured for chain ${chainId}; set LYTH_MCP_EVM_RPC_${chainId}`);
+    }
+    const probes = await probeEvmEndpoints(chainId, endpoints);
+    return text({ chainId, chainName: EVM_CHAINS[chainId]?.name, endpoints: probes });
+  },
+);
+
+server.tool(
+  "evm_token_list",
+  "List canonical EVM token addresses known to the MCP (Circle/Tether issuer-published).",
+  { chainId: z.number().int().positive().optional() },
+  async ({ chainId }) => text({ tokens: listEvmTokens(chainId) }),
+);
+
+server.tool(
+  "evm_native_transfer",
+  "Build (and optionally sign / broadcast) a native ETH transfer from an EVM agent wallet. Submit requires LYTH_MCP_ENABLE_EVM_SUBMIT=1.",
+  {
+    walletName: z.string().min(1),
+    chainId: z.number().int().positive(),
+    to: z.string().describe("0x recipient."),
+    amount: z.string().min(1).describe("Amount in ETH (decimal)."),
+    passphrase: z.string().optional(),
+    sign: z.boolean().optional().describe("Default true."),
+    submit: z.boolean().optional().describe("Default false. Requires LYTH_MCP_ENABLE_EVM_SUBMIT=1."),
+    gasLimit: z.number().int().positive().optional(),
+  },
+  async ({ walletName, chainId, to, amount, passphrase, sign, submit, gasLimit }) => {
+    const wallet = await getEvmWallet(walletName);
+    const chain = EVM_CHAINS[chainId];
+    if (!chain) return errorText(`unsupported chain ${chainId}`);
+    const sym = chain.symbol;
+    const decision = checkEvmCap(wallet.lowValue, chainId, sym, amount);
+    if (!decision.ok && sign !== false) {
+      return errorText(`cap check failed: ${decision.reason}`);
+    }
+    const built = await buildEvmNativeTransfer({
+      wallet,
+      chainId,
+      to,
+      amount,
+      passphrase,
+      sign,
+      submit,
+      gasLimit: gasLimit !== undefined ? BigInt(gasLimit) : undefined,
+    });
+    let bucket: ReturnType<typeof reserveEvmCap> extends Promise<infer R> ? R : never = null as any;
+    if (built.signed) {
+      bucket = await reserveEvmCap({ name: walletName, chainId, asset: sym, amount });
+      const status = built.submitted ? "submitted" : "signed";
+      await addOutboxEntry({
+        kind: "eth_raw",
+        method: "eth_sendRawTransaction",
+        network: chain.name,
+        chainId,
+        walletName,
+        from: built.walletAddress,
+        to: built.to,
+        amount,
+        asset: sym,
+        nonce: built.tx.nonce,
+        payloadHex: built.signed.rawTxHex,
+        status: status === "submitted" ? "submitted" : "signed",
+        txHash: built.submitted?.txHash,
+        lowValueReserved: true,
+      });
+      if (built.submitted) {
+        await moveEvmAccounting({ name: walletName, chainId, asset: sym, amount, from: "reserved", to: "submitted" });
+      }
+    }
+    const receipt = await addReceipt({
+      kind: "evm_native_transfer",
+      status: built.submitted ? "submitted" : built.signed ? "signed" : "drafted",
+      network: chain.name,
+      chainId,
+      title: `EVM native transfer (${chain.name})`,
+      summary: `${amount} ${sym} from ${walletName} to ${to}`,
+      walletName,
+      from: built.walletAddress,
+      to: built.to,
+      amount,
+      asset: sym,
+      txHash: built.submitted?.txHash,
+      result: built,
+    });
+    return text({ built, capAccounting: bucket, receipt });
+  },
+);
+
+server.tool(
+  "erc20_transfer",
+  "Build (and optionally sign / broadcast) an ERC-20 transfer from an EVM agent wallet. Submit requires LYTH_MCP_ENABLE_EVM_SUBMIT=1.",
+  {
+    walletName: z.string().min(1),
+    chainId: z.number().int().positive(),
+    asset: z.string().min(1).describe("Asset symbol, e.g. USDC."),
+    to: z.string(),
+    amount: z.string().min(1),
+    passphrase: z.string().optional(),
+    sign: z.boolean().optional(),
+    submit: z.boolean().optional(),
+    gasLimit: z.number().int().positive().optional(),
+  },
+  async ({ walletName, chainId, asset, to, amount, passphrase, sign, submit, gasLimit }) => {
+    const wallet = await getEvmWallet(walletName);
+    const sym = asset.toUpperCase();
+    const decision = checkEvmCap(wallet.lowValue, chainId, sym, amount);
+    if (!decision.ok && sign !== false) {
+      return errorText(`cap check failed: ${decision.reason}`);
+    }
+    const built = await buildErc20Transfer({
+      wallet,
+      chainId,
+      asset: sym,
+      to,
+      amount,
+      passphrase,
+      sign,
+      submit,
+      gasLimit: gasLimit !== undefined ? BigInt(gasLimit) : undefined,
+    });
+    if (built.signed) {
+      await reserveEvmCap({ name: walletName, chainId, asset: sym, amount });
+      await addOutboxEntry({
+        kind: "eth_raw",
+        method: "eth_sendRawTransaction",
+        network: EVM_CHAINS[chainId]?.name ?? `chain-${chainId}`,
+        chainId,
+        walletName,
+        from: built.walletAddress,
+        to: built.to,
+        amount,
+        asset: sym,
+        nonce: built.tx.nonce,
+        payloadHex: built.signed.rawTxHex,
+        status: built.submitted ? "submitted" : "signed",
+        txHash: built.submitted?.txHash,
+        lowValueReserved: true,
+      });
+      if (built.submitted) {
+        await moveEvmAccounting({ name: walletName, chainId, asset: sym, amount, from: "reserved", to: "submitted" });
+      }
+    }
+    const receipt = await addReceipt({
+      kind: "erc20_transfer",
+      status: built.submitted ? "submitted" : built.signed ? "signed" : "drafted",
+      network: EVM_CHAINS[chainId]?.name ?? `chain-${chainId}`,
+      chainId,
+      title: `ERC-20 ${sym} transfer`,
+      summary: `${amount} ${sym} from ${walletName} to ${to}`,
+      walletName,
+      from: built.walletAddress,
+      to: built.to,
+      amount,
+      asset: sym,
+      txHash: built.submitted?.txHash,
+      result: built,
+    });
+    return text({ built, receipt });
+  },
+);
+
+server.tool(
+  "erc20_approve",
+  "Build an exact-amount ERC-20 approve from an EVM agent wallet. Defaults to exact amount, not unlimited.",
+  {
+    walletName: z.string().min(1),
+    chainId: z.number().int().positive(),
+    asset: z.string().min(1),
+    spender: z.string(),
+    amount: z.string().min(1),
+    passphrase: z.string().optional(),
+    sign: z.boolean().optional(),
+    submit: z.boolean().optional(),
+  },
+  async ({ walletName, chainId, asset, spender, amount, passphrase, sign, submit }) => {
+    const wallet = await getEvmWallet(walletName);
+    const sym = asset.toUpperCase();
+    if (!evmTokenInfo(chainId, sym)) {
+      return errorText(`no canonical ${sym} address known for chain ${chainId}`);
+    }
+    const built = await buildErc20Approve({
+      wallet,
+      chainId,
+      asset: sym,
+      spender,
+      amount,
+      passphrase,
+      sign,
+      submit,
+    });
+    if (built.signed) {
+      await addOutboxEntry({
+        kind: "eth_raw",
+        method: "eth_sendRawTransaction",
+        network: EVM_CHAINS[chainId]?.name ?? `chain-${chainId}`,
+        chainId,
+        walletName,
+        from: built.walletAddress,
+        to: built.to,
+        amount,
+        asset: sym,
+        nonce: built.tx.nonce,
+        payloadHex: built.signed.rawTxHex,
+        status: built.submitted ? "submitted" : "signed",
+        txHash: built.submitted?.txHash,
+        lowValueReserved: false,
+      });
+    }
+    const receipt = await addReceipt({
+      kind: "erc20_approve",
+      status: built.submitted ? "submitted" : built.signed ? "signed" : "drafted",
+      network: EVM_CHAINS[chainId]?.name ?? `chain-${chainId}`,
+      chainId,
+      title: `ERC-20 ${sym} approve`,
+      summary: `${amount} ${sym} approved for ${spender}`,
+      walletName,
+      from: built.walletAddress,
+      to: built.to,
+      amount,
+      asset: sym,
+      txHash: built.submitted?.txHash,
+      result: built,
+    });
+    return text({ built, receipt });
+  },
+);
+
+server.tool(
+  "erc20_allowance",
+  "Read the on-chain ERC-20 allowance owner→spender for an asset on a chain.",
+  {
+    chainId: z.number().int().positive(),
+    asset: z.string().min(1),
+    owner: z.string(),
+    spender: z.string(),
+  },
+  async ({ chainId, asset, owner, spender }) => {
+    if (!isEvmAddress(owner)) return errorText(`invalid owner: ${owner}`);
+    if (!isEvmAddress(spender)) return errorText(`invalid spender: ${spender}`);
+    const result = await readErc20Allowance({ chainId, asset, owner, spender });
+    return text(result);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// x402 payment client (P14.2) + ERC-8004 agent identity (P14.3)
+// ---------------------------------------------------------------------------
+
+server.tool(
+  "x402_vendor_policy_set",
+  "Create or update an x402 vendor policy: origin allowlist, allowed assets, per-request caps, and the EVM wallet that pays.",
+  {
+    vendorId: z.string().min(1),
+    walletName: z.string().min(1),
+    originAllowlist: z.array(z.string().url()).min(1).describe("Exact origins (scheme://host) this policy applies to."),
+    allowedAssets: z.array(z.string()).min(1).describe("Asset symbols, e.g. [\"USDC\"]."),
+    maxPaymentPerRequest: z.record(z.string(), z.string()).describe('Per-request atomic-unit cap. Keys are "<chainId>:<assetSymbol>", e.g. "8453:USDC".'),
+    notes: z.string().optional(),
+  },
+  async ({ vendorId, walletName, originAllowlist, allowedAssets, maxPaymentPerRequest, notes }) => {
+    const wallet = await listEvmWallets().then((all) => all.find((w) => w.name === walletName));
+    if (!wallet) return errorText(`evm wallet '${walletName}' not found`);
+    const policy: X402VendorPolicy = {
+      vendorId,
+      walletName,
+      originAllowlist,
+      allowedAssets: allowedAssets.map((a) => a.toUpperCase()),
+      maxPaymentPerRequest,
+      notes,
+    };
+    const saved = await upsertX402Policy(policy);
+    return text({ policy: saved });
+  },
+);
+
+server.tool(
+  "x402_vendor_policy_list",
+  "List configured x402 vendor policies.",
+  {},
+  async () => text({ policies: await listX402Policies() }),
+);
+
+server.tool(
+  "x402_vendor_policy_get",
+  "Get one x402 vendor policy by id.",
+  { vendorId: z.string().min(1) },
+  async ({ vendorId }) => text({ policy: await getX402Policy(vendorId) }),
+);
+
+server.tool(
+  "x402_vendor_policy_remove",
+  "Remove an x402 vendor policy after explicit confirmation.",
+  {
+    vendorId: z.string().min(1),
+    confirm: z.literal("REMOVE_X402_POLICY"),
+  },
+  async ({ vendorId }) => text(await removeX402Policy(vendorId)),
+);
+
+server.tool(
+  "x402_pay",
+  "Fetch a URL; if the server returns HTTP 402, sign an EIP-3009 USDC authorization from the configured vendor wallet and retry with the X-PAYMENT header. Requires a matching x402 vendor policy.",
+  {
+    vendorId: z.string().min(1).describe("Vendor policy id (set via x402_vendor_policy_set)."),
+    url: z.string().url(),
+    method: z.enum(["GET", "POST", "PUT", "DELETE", "PATCH"]).optional(),
+    headers: z.record(z.string(), z.string()).optional(),
+    body: z.any().optional(),
+    assetSymbolHint: z.string().optional().describe("If multiple accepts entries match, prefer this asset symbol."),
+    passphrase: z.string().optional(),
+    validityWindowSeconds: z.number().int().positive().optional(),
+    dryRun: z.boolean().optional().describe("If true, return the selected requirement but do not sign or retry."),
+  },
+  async ({ vendorId, url, method, headers, body, assetSymbolHint, passphrase, validityWindowSeconds, dryRun }) => {
+    const policy = await getX402Policy(vendorId);
+    const wallet = await getEvmWallet(policy.walletName);
+    const result = await x402Pay({
+      url,
+      method,
+      headers,
+      body,
+      wallet,
+      policy,
+      assetSymbolHint,
+      passphrase,
+      validityWindowSeconds,
+      dryRun,
+    });
+    if (result.paymentReceipt && !dryRun) {
+      const chainId = result.paymentReceipt.chainId;
+      const chainName = EVM_CHAINS[chainId]?.name ?? `chain-${chainId}`;
+      await addOutboxEntry({
+        kind: "eth_raw",
+        method: "x402_pay",
+        network: chainName,
+        chainId,
+        walletName: policy.walletName,
+        from: wallet.address,
+        to: result.paymentReceipt.payTo,
+        amount: result.paymentReceipt.amountAtomic,
+        asset: result.paymentReceipt.asset,
+        payloadHex: `0x${Buffer.from(result.paymentReceipt.headerB64, "base64").toString("hex")}`,
+        status: result.settlement?.success ? "submitted" : "signed",
+        txHash: result.settlement?.transaction,
+        lowValueReserved: false,
+        note: `x402 vendor ${vendorId} resource ${url}`,
+      });
+    }
+    await addReceipt({
+      kind: "x402_pay",
+      status: result.ok ? "submitted" : result.error ? "failed" : "drafted",
+      network: result.paymentReceipt?.network ?? "unknown",
+      chainId: result.paymentReceipt?.chainId ?? CHAIN_ID,
+      title: `x402 pay ${vendorId}`,
+      summary: `${url} → status ${result.status}${result.settlement?.transaction ? `, tx ${result.settlement.transaction}` : ""}`,
+      walletName: policy.walletName,
+      txHash: result.settlement?.transaction,
+      result,
+    });
+    return text(result);
+  },
+);
+
+server.tool(
+  "agent_identity_set_local",
+  "Set the local ERC-8004 agent identity used by vendor connectors that support attribution (e.g. Travala's agentId / rewardWallet).",
+  {
+    agentId: z.string().optional().describe("Agent ID from the ERC-8004 registry (8004scan.io)."),
+    rewardWallet: z.string().optional().describe("EVM reward wallet address on Base."),
+  },
+  async ({ agentId, rewardWallet }) => {
+    if (rewardWallet && !isEvmAddress(rewardWallet)) return errorText(`invalid rewardWallet: ${rewardWallet}`);
+    const current = await readAgentIdentity();
+    const saved = await writeAgentIdentity({ ...current, agentId: agentId ?? current.agentId, rewardWallet: rewardWallet ?? current.rewardWallet });
+    return text({ identity: saved });
+  },
+);
+
+server.tool(
+  "agent_identity_get",
+  "Get the locally configured ERC-8004 agent identity (agentId + rewardWallet) used by vendor connectors.",
+  {},
+  async () => {
+    const identity = await readAgentIdentity();
+    return text({
+      identity,
+      preferredNetwork: "base",
+      preferredNetworkAlias: chainIdToX402Network(8453),
+      hint: "Set via agent_identity_set_local. Self-register an agentId at https://8004scan.io/agents.",
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// NOWPayments connector (P14.4) — sandbox first; production requires explicit
+// environment switch in nowpayments_configure.
+// ---------------------------------------------------------------------------
+
+server.tool(
+  "nowpayments_configure",
+  "Configure the NOWPayments connector. Sandbox is the default; production requires an explicit environment switch.",
+  {
+    environment: z.enum(["sandbox", "production"]).default("sandbox"),
+    apiKey: z.string().min(8),
+    ipnSecret: z.string().min(8).optional(),
+    ipnCallbackUrl: z.string().url().optional(),
+    confirm: z.literal("CONFIGURE_NOWPAYMENTS"),
+  },
+  async ({ environment, apiKey, ipnSecret, ipnCallbackUrl }) => {
+    const config = await configureNowpayments({ environment, apiKey, ipnSecret, ipnCallbackUrl });
+    return text({
+      configured: true,
+      environment: config.environment,
+      baseUrl: config.baseUrl,
+      ipnCallbackUrl: config.ipnCallbackUrl,
+      apiKeyConfigured: true,
+      ipnSecretConfigured: !!config.encryptedIpnSecret,
+      warning: environment === "production"
+        ? "Production NOWPayments configured. Real funds will move. Use sandbox unless this is intentional."
+        : undefined,
+    });
+  },
+);
+
+server.tool(
+  "nowpayments_status",
+  "Probe the NOWPayments API health endpoint with the configured key + environment.",
+  {},
+  async () => text(await nowpaymentsStatus()),
+);
+
+server.tool(
+  "nowpayments_currencies",
+  "List all currencies known to NOWPayments.",
+  {},
+  async () => text(await nowpaymentsCurrencies()),
+);
+
+server.tool(
+  "nowpayments_merchant_coins",
+  "List the coins the configured merchant account has enabled.",
+  {},
+  async () => text(await nowpaymentsMerchantCoins()),
+);
+
+server.tool(
+  "nowpayments_estimate",
+  "Estimate how much of pay_currency is needed to satisfy price_amount of price_currency.",
+  {
+    amount: z.number().positive(),
+    currencyFrom: z.string().min(2),
+    currencyTo: z.string().min(2),
+  },
+  async ({ amount, currencyFrom, currencyTo }) =>
+    text(await nowpaymentsEstimate({ amount, currencyFrom, currencyTo })),
+);
+
+server.tool(
+  "nowpayments_payment_create",
+  "Create a NOWPayments payment (deposit-address flow). Writes a local outbox entry + receipt.",
+  {
+    priceAmount: z.number().positive(),
+    priceCurrency: z.string().min(2),
+    payCurrency: z.string().min(2),
+    orderId: z.string().optional(),
+    orderDescription: z.string().optional(),
+    ipnCallbackUrl: z.string().url().optional(),
+    payAmount: z.number().positive().optional(),
+    payinExtraId: z.string().optional(),
+  },
+  async (args) => {
+    const payment = await nowpaymentsCreatePayment({
+      priceAmount: args.priceAmount,
+      priceCurrency: args.priceCurrency,
+      payCurrency: args.payCurrency,
+      orderId: args.orderId,
+      orderDescription: args.orderDescription,
+      ipnCallbackUrl: args.ipnCallbackUrl,
+      payAmount: args.payAmount,
+      payinExtraId: args.payinExtraId,
+    });
+    const receipt = await addReceipt({
+      kind: "nowpayments_payment_create",
+      status: "submitted",
+      network: "nowpayments",
+      chainId: CHAIN_ID,
+      title: `NOWPayments payment ${payment.payment_id}`,
+      summary: `${payment.price_amount} ${payment.price_currency} → ${payment.pay_amount} ${payment.pay_currency} @ ${payment.pay_address}`,
+      result: payment,
+    });
+    return text({ payment, receipt });
+  },
+);
+
+server.tool(
+  "nowpayments_invoice_create",
+  "Create a NOWPayments hosted invoice page.",
+  {
+    priceAmount: z.number().positive(),
+    priceCurrency: z.string().min(2),
+    payCurrency: z.string().min(2).optional(),
+    orderId: z.string().optional(),
+    orderDescription: z.string().optional(),
+    ipnCallbackUrl: z.string().url().optional(),
+    successUrl: z.string().url().optional(),
+    cancelUrl: z.string().url().optional(),
+  },
+  async (args) => {
+    const invoice = await nowpaymentsCreateInvoice({
+      priceAmount: args.priceAmount,
+      priceCurrency: args.priceCurrency,
+      payCurrency: args.payCurrency,
+      orderId: args.orderId,
+      orderDescription: args.orderDescription,
+      ipnCallbackUrl: args.ipnCallbackUrl,
+      successUrl: args.successUrl,
+      cancelUrl: args.cancelUrl,
+    });
+    const receipt = await addReceipt({
+      kind: "nowpayments_invoice_create",
+      status: "submitted",
+      network: "nowpayments",
+      chainId: CHAIN_ID,
+      title: `NOWPayments invoice ${invoice.id}`,
+      summary: `${invoice.price_amount} ${invoice.price_currency} @ ${invoice.invoice_url}`,
+      result: invoice,
+    });
+    return text({ invoice, receipt });
+  },
+);
+
+server.tool(
+  "nowpayments_payment_status",
+  "Get the current status of a NOWPayments payment by id.",
+  { paymentId: z.string().min(1) },
+  async ({ paymentId }) => text(await nowpaymentsGetPayment(paymentId)),
+);
+
+server.tool(
+  "nowpayments_payment_list",
+  "List recent NOWPayments payments for the configured merchant.",
+  {
+    limit: z.number().int().positive().max(500).optional(),
+    page: z.number().int().min(0).optional(),
+    dateFrom: z.string().optional(),
+    dateTo: z.string().optional(),
+  },
+  async (args) => text(await nowpaymentsListPayments(args)),
+);
+
+server.tool(
+  "nowpayments_refund_draft",
+  "Draft a manual refund request for a NOWPayments payment. NOWPayments refunds are support-mediated; this just produces the request shape.",
+  {
+    paymentId: z.string().min(1),
+    reason: z.string().min(1),
+    recipientAddress: z.string().optional(),
+  },
+  async ({ paymentId, reason, recipientAddress }) => text(nowpaymentsRefundDraft({ paymentId, reason, recipientAddress })),
+);
+
+server.tool(
+  "nowpayments_ipn_verify",
+  "Verify a NOWPayments IPN webhook body against an x-nowpayments-sig HMAC-SHA512 (sorted-keys JSON).",
+  {
+    rawBody: z.string().min(1).describe("Raw webhook body as a string."),
+    sigHeader: z.string().min(1).describe("Value of the x-nowpayments-sig header."),
+  },
+  async ({ rawBody, sigHeader }) => text(await verifyNowpaymentsIpn({ rawBody, sigHeader })),
+);
+
+server.tool(
+  "nowpayments_config_redacted",
+  "Inspect the NOWPayments connector config (no secrets revealed).",
+  {},
+  async () => text({ config: await nowpaymentsRedactedConfig() }),
+);
+
+// ---------------------------------------------------------------------------
+// Travala (P14.5) — pay-side wrappers around Travala's hosted MCP server.
+// lyth_mcp does not own catalog/search; install Travala's MCP separately for
+// travala_search_hotel / travala_search_package. lyth_mcp owns the wallet,
+// x402 payment, ERC-8004 attribution, outbox, and receipts.
+// ---------------------------------------------------------------------------
+
+server.tool(
+  "travala_info",
+  "Show how lyth_mcp talks to Travala: hosted MCP URL, agent identity wiring, x402 payment path.",
+  {},
+  async () => {
+    const identity = await readAgentIdentity();
+    return text({
+      travalaMcpUrl: travalaMcpUrl(),
+      agentIdentity: identity,
+      paymentNetwork: "base (chainId 8453)",
+      paymentAsset: "USDC",
+      flow: [
+        "Install Travala's MCP server alongside lyth_mcp (https://travel-mcp.travala.com/mcp) for travala_search_hotel / travala_search_package.",
+        "Call x402_vendor_policy_set with vendorId='travala', the EVM wallet name, originAllowlist including the URL Travala expects payment at, and a USDC cap.",
+        "Call agent_identity_set_local with your 8004scan agentId + Base rewardWallet to claim cbBTC giveback.",
+        "After search_package returns packageId + sessionId, call travala_book_pay to book + pay in one step.",
+        "If travala_book_pay errors or times out, call travala_book_recover before retrying to avoid double-charge.",
+      ],
+    });
+  },
+);
+
+server.tool(
+  "travala_proxy_call",
+  "Forward an arbitrary tool call to Travala's hosted MCP (e.g. travala_search_hotel, travala_search_package, travala_manage_bookings, travala_cancel_booking). Read-only by design; booking + payment uses travala_book_pay.",
+  {
+    tool: z.string().min(1),
+    args: z.record(z.string(), z.any()).optional(),
+  },
+  async ({ tool, args }) => {
+    const result = await travalaProxyCall({ tool, args: args ?? {} });
+    return text({ tool, travalaMcpUrl: travalaMcpUrl(), result });
+  },
+);
+
+server.tool(
+  "travala_book_pay",
+  "Book a Travala package and pay the x402 invoice with the configured Base USDC wallet. Reuses the x402 vendor policy 'travala' and the locally configured ERC-8004 agentId / rewardWallet for cbBTC attribution.",
+  {
+    packageId: z.string().min(1),
+    sessionId: z.string().min(1),
+    customer: z.object({
+      firstName: z.string().min(1),
+      lastName: z.string().min(1),
+      email: z.string().email(),
+      phone: z.string().min(3),
+    }),
+    vendorPolicyId: z.string().optional().describe("x402 vendor policy id. Default 'travala'."),
+    passphrase: z.string().optional(),
+    dryRun: z.boolean().optional(),
+    rewardWalletOverride: z.string().optional().describe("Override the locally configured rewardWallet for this booking only."),
+    agentIdOverride: z.string().optional(),
+  },
+  async ({ packageId, sessionId, customer, vendorPolicyId, passphrase, dryRun, rewardWalletOverride, agentIdOverride }) => {
+    const policy = await getX402Policy(vendorPolicyId ?? "travala");
+    const wallet = await getEvmWallet(policy.walletName);
+    const identity = await readAgentIdentity();
+    const agentId = agentIdOverride ?? identity.agentId;
+    const rewardWallet = rewardWalletOverride ?? identity.rewardWallet;
+    if (rewardWallet && !isEvmAddress(rewardWallet)) {
+      return errorText(`invalid rewardWallet: ${rewardWallet}`);
+    }
+    const result = await travalaBookPay({
+      packageId,
+      sessionId,
+      customer,
+      agentId,
+      rewardWallet,
+      wallet,
+      policy,
+      passphrase,
+      dryRun,
+    });
+    const receipt = await addReceipt({
+      kind: "travala_book_pay",
+      status: result.paid?.ok ? "submitted" : result.warning ? "drafted" : "failed",
+      network: "base",
+      chainId: 8453,
+      title: `Travala booking ${result.bookingId ?? "(pending)"}`,
+      summary: `package ${packageId} for ${customer.firstName} ${customer.lastName}`,
+      walletName: policy.walletName,
+      from: wallet.address,
+      txHash: result.paid?.settlement?.transaction,
+      result: { ...result, agentId, rewardWallet },
+    });
+    return text({ result, receipt, agentId, rewardWallet, warning: result.warning });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Coinsbee (P14.6) — interim NOWPayments-invoice path. Direct reseller API is
+// gated on partnership/BD; no fabricated endpoints.
+// ---------------------------------------------------------------------------
+
+server.tool(
+  "coinsbee_guide",
+  "Explain how to buy a Coinsbee gift card from the agent today (interim NOWPayments path) and what's required to unlock the direct reseller API.",
+  {},
+  async () => text({
+    interim: {
+      path: "Coinsbee invoice paid via NOWPayments",
+      steps: [
+        "Open https://www.coinsbee.com and select the brand + denomination + region you want.",
+        "Choose 'pay with crypto' — Coinsbee issues a payment invoice (in most regions, via NOWPayments under the hood).",
+        "Copy the invoice id (or the NOWPayments payment_id if shown).",
+        "Call coinsbee_via_nowpayments_track with the payment_id to register the purchase locally and watch its status.",
+        "Fund the deposit address via erc20_transfer (e.g. USDC on Ethereum) from your EVM agent wallet, within the wallet's per-tx + daily caps.",
+        "Coinsbee delivers the gift-card code by email once payment confirms; code retrieval is out-of-band today.",
+      ],
+      limitations: [
+        "Code retrieval is email-only; the agent cannot auto-fetch the code without mailbox access.",
+        "Refunds / disputes go through Coinsbee support, not NOWPayments.",
+        "Brand availability is region-locked; the agent must respect Coinsbee's geographic terms.",
+      ],
+    },
+    directApi: {
+      status: "blocked-on-partnership",
+      requires: [
+        "Coinsbee BD contract granting reseller API access.",
+        "Published catalog / order / status / code-retrieval endpoints under NDA.",
+        "KYB onboarding of the reseller account.",
+      ],
+      note: "No coinsbee_* direct API tools are exposed by lyth_mcp until the partnership returns real specs. Do not fabricate endpoints.",
+    },
+  }),
+);
+
+server.tool(
+  "coinsbee_via_nowpayments_track",
+  "Track a Coinsbee gift-card purchase that is being paid through NOWPayments. Wraps nowpayments_payment_status and records the purchase locally for receipts.",
+  {
+    paymentId: z.string().min(1).describe("NOWPayments payment_id issued by Coinsbee's checkout."),
+    brand: z.string().min(1),
+    denomination: z.string().min(1),
+    region: z.string().optional(),
+    recipientEmail: z.string().email().optional(),
+    notes: z.string().optional(),
+  },
+  async ({ paymentId, brand, denomination, region, recipientEmail, notes }) => {
+    const payment = await nowpaymentsGetPayment(paymentId);
+    const receipt = await addReceipt({
+      kind: "coinsbee_via_nowpayments_track",
+      status: payment.payment_status === "finished" ? "confirmed" : "submitted",
+      network: "coinsbee+nowpayments",
+      chainId: CHAIN_ID,
+      title: `Coinsbee ${brand} ${denomination}`,
+      summary: `Coinsbee gift card via NOWPayments payment ${paymentId}; status=${payment.payment_status}`,
+      result: { brand, denomination, region, recipientEmail, notes, payment },
+    });
+    return text({
+      brand,
+      denomination,
+      region,
+      recipientEmail,
+      payment,
+      receipt,
+      warning:
+        "Code retrieval is via email from Coinsbee. Refunds + disputes go through Coinsbee support, not NOWPayments.",
+    });
+  },
+);
+
+server.tool(
+  "travala_book_recover",
+  "Look up a Travala booking that errored or timed out, BEFORE retrying travala_book_pay. Avoids double-charge.",
+  {
+    packageId: z.string().min(1),
+    sessionId: z.string().min(1),
+  },
+  async ({ packageId, sessionId }) => {
+    const result = await travalaBookStatus({ packageId, sessionId });
+    return text({ travalaMcpUrl: travalaMcpUrl(), result });
+  },
+);
+
+
+server.tool(
+  "agent_identity_register_guide",
+  "Explain how to obtain an ERC-8004 agentId for use with vendor connectors that support attribution (e.g. Travala cbBTC giveback).",
+  {},
+  async () => text({
+    steps: [
+      "Visit https://8004scan.io/agents and connect a Base EVM wallet.",
+      "Register a new agent — this writes an entry to the ERC-8004 IdentityRegistry on Base.",
+      "Copy the returned agentId and your chosen rewardWallet (an EVM address on Base — EOA, multisig, or treasury contract).",
+      "Call agent_identity_set_local with both values; vendor connectors that read attribution (Travala today) will then route giveback to your rewardWallet.",
+    ],
+    reference: {
+      registryUi: "https://8004scan.io/agents",
+      ercSpecRepo: "https://github.com/ChaosChain/trustless-agents-erc-ri",
+      ercDraft: "https://eips.ethereum.org/EIPS/eip-8004",
+    },
+    note:
+      "No on-chain register_draft tool is provided yet. The ERC-8004 reference contracts are deployed on Ethereum Sepolia in the upstream repo (Jan 2026 spec); a verified Base-mainnet IdentityRegistry address has not been published for direct on-chain tx drafting. Once an authoritative Base-mainnet IdentityRegistry address is published, this MCP can ship an agent_identity_register_draft tool that builds the registration tx directly.",
+  }),
 );
 
 server.tool(

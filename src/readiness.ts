@@ -7,7 +7,8 @@ export type ReadinessGateId =
   | "runbook"
   | "security"
   | "docs"
-  | "tests";
+  | "tests"
+  | "external_commerce";
 
 export interface ReadinessContext {
   toolNames: string[];
@@ -139,6 +140,34 @@ export function buildReadinessGates(ctx: ReadinessContext) {
       ],
       missing: [
         "Production deployment guide, wallet handoff guide, SDK compatibility matrix, security model signoff, and end-user app docs.",
+      ],
+    }),
+    gate({
+      id: "external_commerce",
+      title: "External Commerce (EVM + x402 + NOWPayments + Travala)",
+      percent: hasAll(ctx, [
+        "evm_wallet_create",
+        "erc20_transfer",
+        "x402_pay",
+        "x402_vendor_policy_set",
+        "agent_identity_set_local",
+        "nowpayments_configure",
+        "nowpayments_ipn_verify",
+        "travala_book_pay",
+      ]) ? 55 : 25,
+      done: [
+        "EVM hot-wallet primitive (secp256k1, encrypted, per-(chain,asset) caps) on Ethereum + Base.",
+        "EIP-1559 native + ERC-20 builders with EIP-712 signing and outbox/receipt integration.",
+        "x402 client with EIP-3009 USDC authorization, origin allowlist, per-vendor caps, dry-run mode.",
+        "NOWPayments connector (sandbox/prod toggle, x-api-key, IPN HMAC-SHA512 verifier).",
+        "Travala bridge tools that pay through Travala's hosted MCP via x402, with ERC-8004 agentId + rewardWallet attribution.",
+        "Coinsbee interim path via NOWPayments-issued invoices.",
+      ],
+      missing: [
+        "LYTH_MCP_ENABLE_EVM_SUBMIT live broadcast flag is OFF by default until production switch is approved (principal-signed approval, empty outbox, caps explicitly set).",
+        "ERC-8004 on-chain agent_identity_register_draft (gated on a verified Base-mainnet IdentityRegistry address).",
+        "Direct Coinsbee reseller API (partnership-gated, no fabricated endpoints).",
+        "Live verification of Travala MCP response shapes (current parser handles structured + text content + paymentUrl flavors).",
       ],
     }),
     gate({

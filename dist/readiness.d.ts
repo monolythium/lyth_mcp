@@ -1,4 +1,4 @@
-export type ReadinessGateId = "no_evm" | "mrc" | "agent_commerce" | "bridge" | "wallet" | "runbook" | "security" | "docs" | "tests";
+export type ReadinessGateId = "no_evm" | "mrc" | "agent_commerce" | "bridge" | "wallet" | "runbook" | "security" | "docs" | "tests" | "external_commerce";
 export interface ReadinessContext {
     toolNames: string[];
     runbookCount: number;

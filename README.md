@@ -914,6 +914,26 @@ Run:
 npm start
 ```
 
+## External Commerce (EVM, x402, NOWPayments, Travala, Coinsbee)
+
+An optional surface lets the agent reach mainstream crypto-commerce vendors using a separate, low-value **EVM hot wallet** (secp256k1, encrypted), the [x402](https://github.com/coinbase/x402) payment protocol, and ERC-8004 agent identity. It is sandbox-first and broadcasts are off unless `LYTH_MCP_ENABLE_EVM_SUBMIT=1`.
+
+Quick map:
+
+| Need | Tools |
+|---|---|
+| Create / fund / cap an EVM agent wallet | `evm_wallet_create`, `evm_wallet_fund_request`, `evm_wallet_limits`, `evm_wallet_pause`, `evm_wallet_delete` |
+| Native + ERC-20 transfers | `evm_native_transfer`, `erc20_transfer`, `erc20_approve`, `erc20_allowance`, `evm_token_list` |
+| RPC health | `evm_rpc_health` |
+| Pay any x402 resource | `x402_vendor_policy_set`, `x402_pay` |
+| Agent attribution | `agent_identity_set_local`, `agent_identity_get`, `agent_identity_register_guide` |
+| NOWPayments | `nowpayments_configure`, `nowpayments_estimate`, `nowpayments_payment_create`, `nowpayments_invoice_create`, `nowpayments_payment_status`, `nowpayments_ipn_verify` |
+| Travala (book + pay via x402) | `travala_info`, `travala_book_pay`, `travala_book_recover`, `travala_proxy_call` |
+| Coinsbee (interim NOWPayments path) | `coinsbee_guide`, `coinsbee_via_nowpayments_track` |
+| Readiness | `readiness_check gate=external_commerce` |
+
+Full walkthroughs (setup, examples, recovery, production switch checklist) live in `docs/EXTERNAL_COMMERCE.md`.
+
 ## Additional Docs
 
 Focused docs live in:
@@ -923,4 +943,5 @@ docs/CLAUDE_CODE_EXAMPLES.md
 docs/OPERATOR_GUIDE.md
 docs/VENDOR_REGISTRY.md
 docs/RUNBOOK_GUIDE.md
+docs/EXTERNAL_COMMERCE.md
 ```

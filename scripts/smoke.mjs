@@ -362,7 +362,9 @@ const readinessDashboard = readiness.readinessCheck({
   docsUpdated: true,
   testsUpdated: true,
 });
-assert(readinessDashboard.gates.length === 9, "expected all readiness gates");
+assert(readinessDashboard.gates.length === 10, "expected all readiness gates");
+const externalGate = readinessDashboard.gates.find((g) => g.id === "external_commerce");
+assert(externalGate, "external_commerce readiness gate must be present");
 assert(readiness.readinessCheck({
   toolNames: [],
   runbookCount: 0,
@@ -401,6 +403,126 @@ try {
   await mockRpc.close();
 }
 
+// ---------------------------------------------------------------------------
+// P14 — EVM hot wallet, ERC-20 builders, x402 client, NOWPayments IPN.
+// ---------------------------------------------------------------------------
+process.env.LYTH_MCP_EVM_WALLET_STORE = join(temp, "evm_wallets.json");
+process.env.LYTH_MCP_EVM_HOT_KEY = join(temp, "evm_hot.key");
+process.env.LYTH_MCP_EVM_LOCAL_KEY = join(temp, "evm_local.key");
+process.env.LYTH_MCP_X402_STORE = join(temp, "x402_policies.json");
+process.env.LYTH_MCP_NOWPAYMENTS_CONFIG = join(temp, "nowpayments.json");
+process.env.LYTH_MCP_NOWPAYMENTS_KEY = join(temp, "nowpayments.key");
+
+const evmWallet = await import("../dist/evm_wallet.js");
+const evmTx = await import("../dist/evm_tx.js");
+const x402 = await import("../dist/x402.js");
+const x402Store = await import("../dist/x402_store.js");
+const nowpayments = await import("../dist/nowpayments.js");
+const crypto = await import("node:crypto");
+
+// EVM wallet: create + cap check + delete
+const evmCreated = await evmWallet.createEvmWallet({
+  name: "smoke-evm",
+  allowLocalKey: true,
+  allowedChainIds: [8453],
+  allowedAssets: ["USDC"],
+  agent: { purpose: "smoke", paused: false },
+  lowValue: { enabled: true, caps: [{ chainId: 8453, asset: "USDC", maxPerTx: "25", dailyLimit: "50" }] },
+});
+assert(/^0x[0-9a-fA-F]{40}$/.test(evmCreated.address), "evm wallet must produce a checksummed address");
+const decisionOk = evmWallet.checkEvmCap(evmCreated.lowValue, 8453, "USDC", "10");
+assert(decisionOk.ok, "10 USDC must pass 25 USDC per-tx cap");
+const decisionFail = evmWallet.checkEvmCap(evmCreated.lowValue, 8453, "USDC", "60");
+assert(!decisionFail.ok && /per-tx cap/.test(decisionFail.reason), "60 USDC must fail per-tx cap");
+
+// ERC-20 calldata encoding
+const calldata = evmTx.encodeErc20Transfer("0x000000000000000000000000000000000000dEaD", 1_000_000n);
+assert(calldata.startsWith("0xa9059cbb"), "ERC-20 transfer selector must be 0xa9059cbb");
+assert(calldata.length === 138, "ERC-20 transfer calldata must be 138 hex chars");
+
+// EIP-1559 sign + EIP-712 sign sanity (no RPC required)
+const privBytes = evmWallet.hexToBytes("4646464646464646464646464646464646464646464646464646464646464646");
+const signedTx = evmTx.signEip1559(
+  { chainId: 1, nonce: 0n, maxPriorityFeePerGas: 1_000_000_000n, maxFeePerGas: 20_000_000_000n, gasLimit: 21000n, to: "0x3535353535353535353535353535353535353535", value: 1_000_000_000_000_000_000n, data: "0x" },
+  privBytes,
+);
+assert(signedTx.rawTxHex.startsWith("0x02"), "EIP-1559 envelope must start with 0x02");
+assert(signedTx.from === "0x9d8A62f656a8d1615C1294fd71e9CFb3E4855A4F", "EIP-1559 sign must recover the known address");
+
+// x402 end-to-end against a mock server (success + failure paths)
+const x402Server = createServer((req, res) => {
+  const xp = req.headers["x-payment"];
+  if (!xp) {
+    res.writeHead(402, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      x402Version: 1,
+      error: "payment required",
+      accepts: [{
+        scheme: "exact",
+        network: "base",
+        maxAmountRequired: "100000",
+        asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        payTo: "0x000000000000000000000000000000000000bEEF",
+        resource: "http://localhost/test",
+        description: "smoke",
+        maxTimeoutSeconds: 60,
+        extra: { name: "USDC", version: "2" },
+      }],
+    }));
+    return;
+  }
+  res.writeHead(200, {
+    "content-type": "application/json",
+    "x-payment-response": Buffer.from(JSON.stringify({ success: true, transaction: "0xabc", network: "base", payer: "smoke" })).toString("base64"),
+  });
+  res.end(JSON.stringify({ data: "premium" }));
+});
+await new Promise((r) => x402Server.listen(0, "127.0.0.1", r));
+const x402Port = x402Server.address().port;
+try {
+  const policy = {
+    vendorId: "smoke-vendor",
+    walletName: "smoke-evm",
+    originAllowlist: [`http://127.0.0.1:${x402Port}`],
+    allowedAssets: ["USDC"],
+    maxPaymentPerRequest: { "8453:USDC": "200000" },
+  };
+  const ok = await x402.x402Pay({ url: `http://127.0.0.1:${x402Port}/`, wallet: await evmWallet.getEvmWallet("smoke-evm"), policy });
+  assert(ok.ok && ok.status === 200 && ok.retried, "x402 success path must retry and return 200");
+  assert(ok.settlement?.success === true, "x402 settlement header must decode");
+  // Origin not in allowlist → fail closed
+  const badPolicy = { ...policy, originAllowlist: ["http://other.example.com"] };
+  const bad = await x402.x402Pay({ url: `http://127.0.0.1:${x402Port}/`, wallet: await evmWallet.getEvmWallet("smoke-evm"), policy: badPolicy });
+  assert(!bad.ok && /allowlist/.test(bad.error ?? ""), "x402 must fail closed when origin not in allowlist");
+  // Cap exceeded → fail closed
+  const cappedPolicy = { ...policy, maxPaymentPerRequest: { "8453:USDC": "1" } };
+  const capped = await x402.x402Pay({ url: `http://127.0.0.1:${x402Port}/`, wallet: await evmWallet.getEvmWallet("smoke-evm"), policy: cappedPolicy });
+  assert(!capped.ok && /exceeds vendor cap/.test(capped.error ?? ""), "x402 must fail closed when amount exceeds vendor cap");
+} finally {
+  await new Promise((r) => x402Server.close(() => r()));
+}
+await x402Store.upsertX402Policy({
+  vendorId: "smoke-store",
+  walletName: "smoke-evm",
+  originAllowlist: ["http://127.0.0.1:1"],
+  allowedAssets: ["USDC"],
+  maxPaymentPerRequest: { "8453:USDC": "100" },
+});
+const policies = await x402Store.listX402Policies();
+assert(policies.find((p) => p.vendorId === "smoke-store"), "x402 policy store must persist policies");
+
+// NOWPayments IPN signature verification
+await nowpayments.configureNowpayments({ environment: "sandbox", apiKey: "smoke-key-1234567890", ipnSecret: "smoke-ipn-secret-12345" });
+const ipnBody = { actually_paid: 5, pay_amount: 5, pay_currency: "usdc", payment_id: 1, payment_status: "finished" };
+const canonical = nowpayments.canonicalizeForIpn(ipnBody);
+const goodSig = crypto.createHmac("sha512", "smoke-ipn-secret-12345").update(canonical).digest("hex");
+const goodVerify = await nowpayments.verifyNowpaymentsIpn({ rawBody: JSON.stringify(ipnBody), sigHeader: goodSig });
+assert(goodVerify.valid === true, "valid NOWPayments IPN must pass HMAC verification");
+const badVerify = await nowpayments.verifyNowpaymentsIpn({ rawBody: JSON.stringify(ipnBody), sigHeader: "0".repeat(128) });
+assert(badVerify.valid === false && /mismatch/.test(badVerify.reason), "bad NOWPayments IPN signature must fail");
+
+await evmWallet.deleteEvmWallet("smoke-evm", "smoke-evm");
+
 console.log(JSON.stringify({
   ok: true,
   temp,
@@ -424,6 +546,11 @@ console.log(JSON.stringify({
   readiness: readinessDashboard.completionPercent,
   demoConnectorTemplates: connectorTemplates.length,
   runbooks: runbookList.length,
+  evmWalletAddress: evmCreated.address,
+  evmTxSigningOk: signedTx.from === "0x9d8A62f656a8d1615C1294fd71e9CFb3E4855A4F",
+  x402PolicyCount: policies.length,
+  nowpaymentsIpnVerifyOk: goodVerify.valid === true,
+  nowpaymentsIpnRejectOk: badVerify.valid === false,
 }, null, 2));
 
 async function startMockRpc() {
