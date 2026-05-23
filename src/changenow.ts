@@ -34,6 +34,7 @@ import {
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { requireApproval } from "./approval.js";
 
 const STORE_VERSION = 1;
 const KDF_N = 32768;
@@ -422,6 +423,12 @@ export async function changenowEstimate(args: {
   });
 }
 
+/**
+ * Create a non-custodial swap order. Routes through the approval bridge
+ * (Stele's secure overlay, or any other host that set LYTH_MCP_APPROVAL_URL)
+ * before submitting — so a Claude-initiated swap can't fire without an
+ * explicit human approval when Stele is the host.
+ */
 export async function changenowCreateSwap(args: {
   fromCurrency: string;
   toCurrency: string;
@@ -461,6 +468,13 @@ export async function changenowCreateSwap(args: {
     rateId: args.rateId,
     partner: args.partner ?? partnerCode,
   };
+  // Gated by the host (Stele) when LYTH_MCP_APPROVAL_URL is set; no-op
+  // otherwise so standalone-MCP behavior is preserved.
+  await requireApproval({
+    tool: "changenow_swap_create",
+    summary: `Swap ${args.fromAmount ?? "?"} ${args.fromCurrency}/${args.fromNetwork ?? "-"} → ${args.toCurrency}/${args.toNetwork ?? "-"} (payout: ${args.payoutAddress})`,
+    prepared_tx: body,
+  });
   return cnRequest<ChangenowSwap>("POST", "/exchange", { body });
 }
 
