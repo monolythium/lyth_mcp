@@ -6,7 +6,8 @@
   "type": "module",
   "private": false,
   "bin": {
-    "lyth-mcp": "dist/index.js"
+    "lyth-mcp": "dist/index.js",
+    "lyth-dev-mcp": "dist/dev_index.js"
   },
   "files": [
     "dist",
@@ -29,7 +30,7 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node scripts/smoke.mjs",
+    "test": "npm run build && node scripts/smoke.mjs && node scripts/native-dev-profile-smoke.mjs",
     "prepare": "node scripts/verify-dist.cjs"
   },
   "dependencies": {
