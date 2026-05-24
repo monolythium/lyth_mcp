@@ -366,7 +366,7 @@ function monoDevArgs(toolName: string, input: Record<string, unknown>): string[]
         "deploy-plan",
         root,
         "--authority",
-        stringInput(input.authorityAddress, "mono1devkitpreview00000000000000"),
+        stringInput(input.authorityAddress, "mono1zg69v7y6hn00qyfzxdz92enh3zv64w7vajvdc4"),
         "--network",
         stringInput(input.networkId, "local-dev"),
       ];
