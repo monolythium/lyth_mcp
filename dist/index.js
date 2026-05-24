@@ -47,6 +47,7 @@ import { createProfile, customerFieldsFromProfile, deleteProfile, getProfile, li
 import { travalaBookPay, travalaBookStatus, travalaListTools, travalaMcpUrl, travalaProxyCall, } from "./travala.js";
 import { configureDuffel, duffelCancelOrder, duffelConfigRedacted, duffelConfirmCancellation, duffelCreateOfferRequest, duffelCreateOrder, duffelGetOffer, duffelGetOrder, duffelGetSeatMaps, duffelListOffers, duffelListOrders, duffelPassengerFromProfile, duffelPayOrder, summarizeOffer, summarizeOrder, } from "./duffel.js";
 import { configureNowpayments, nowpaymentsCreateInvoice, nowpaymentsCreatePayment, nowpaymentsCurrencies, nowpaymentsEstimate, nowpaymentsGetPayment, nowpaymentsListPayments, nowpaymentsMerchantCoins, nowpaymentsRedactedConfig, nowpaymentsRefundDraft, nowpaymentsStatus, verifyNowpaymentsIpn, } from "./nowpayments.js";
+import { configureChangenow, changenowStatus, changenowCurrencies, changenowMinAmount, changenowEstimate, changenowCreateSwap, changenowSwapStatus, changenowSwapList, changenowFiatEstimate, changenowFiatSellDraft, changenowRedactedConfig, } from "./changenow.js";
 const DEFAULT_CHAIN_ID = 69420;
 const DEFAULT_NETWORK = "testnet-69420";
 const DEFAULT_RPCS = [
@@ -1351,6 +1352,17 @@ const MCP_TOOL_NAMES = [
     "nowpayments_refund_draft",
     "nowpayments_ipn_verify",
     "nowpayments_config_redacted",
+    "changenow_configure",
+    "changenow_status",
+    "changenow_currencies",
+    "changenow_min_amount",
+    "changenow_estimate",
+    "changenow_swap_create",
+    "changenow_swap_status",
+    "changenow_swap_list",
+    "changenow_fiat_estimate",
+    "changenow_fiat_sell_draft",
+    "changenow_config_redacted",
     "travala_info",
     "travala_proxy_call",
     "travala_book_pay",
@@ -2879,6 +2891,91 @@ server.tool("nowpayments_ipn_verify", "Verify a NOWPayments IPN webhook body aga
     sigHeader: z.string().min(1).describe("Value of the x-nowpayments-sig header."),
 }, async ({ rawBody, sigHeader }) => text(await verifyNowpaymentsIpn({ rawBody, sigHeader })));
 server.tool("nowpayments_config_redacted", "Inspect the NOWPayments connector config (no secrets revealed).", {}, async () => text({ config: await nowpaymentsRedactedConfig() }));
+// ---------------------------------------------------------------------------
+// ChangeNow — non-custodial swap (crypto <-> crypto) + fiat off-ramp.
+// Pattern mirrors NowPayments above. API key + partner code stored
+// encrypted (AES-256-GCM + scrypt) at ~/.lyth_mcp/changenow.json.
+// Partner code drives the revenue-share program (see ChangeNow partner
+// program docs); pass `partner` on swap_create to override per-swap.
+// ---------------------------------------------------------------------------
+server.tool("changenow_configure", "Configure ChangeNow API access. Stores the public api key, optional private api key, and optional partner code encrypted at ~/.lyth_mcp/changenow.json (AES-256-GCM + scrypt). The private key is only required for swap_list (the /exchanges endpoint). Required before any other changenow_* tool.", {
+    apiKey: z.string().min(8).describe("ChangeNow public api key (creates swaps, runs estimates)."),
+    privateApiKey: z.string().min(8).optional().describe("ChangeNow private api key (only required for swap_list). Separate from the public key in the partner dashboard."),
+    partnerCode: z.string().min(1).optional().describe("Partner code for revenue share. Optional but recommended."),
+    defaultRefundAddress: z.string().min(8).optional().describe("Refund address used when a swap fails."),
+}, async ({ apiKey, privateApiKey, partnerCode, defaultRefundAddress }) => {
+    const config = await configureChangenow({ apiKey, privateApiKey, partnerCode, defaultRefundAddress });
+    return text({
+        configured: true,
+        baseUrl: config.baseUrl,
+        privateApiKeyConfigured: !!config.encryptedPrivateApiKey,
+        partnerConfigured: !!config.encryptedPartnerCode,
+        defaultRefundAddress: config.defaultRefundAddress,
+        warning: "ChangeNow swaps move real funds. Inspect each swap_create payload before broadcasting deposits.",
+    });
+});
+server.tool("changenow_status", "Probe ChangeNow API reachability with the configured key.", {}, async () => text(await changenowStatus()));
+server.tool("changenow_currencies", "List ChangeNow currencies (filterable by active / flow / buy / sell).", {
+    active: z.boolean().optional(),
+    flow: z.enum(["standard", "fixed-rate"]).optional(),
+    buy: z.boolean().optional(),
+    sell: z.boolean().optional(),
+}, async (args) => text(await changenowCurrencies(args)));
+server.tool("changenow_min_amount", "Get the minimum swappable amount for a pair.", {
+    fromCurrency: z.string().min(2),
+    toCurrency: z.string().min(2),
+    fromNetwork: z.string().optional(),
+    toNetwork: z.string().optional(),
+    flow: z.enum(["standard", "fixed-rate"]).optional(),
+}, async (args) => text(await changenowMinAmount(args)));
+server.tool("changenow_estimate", "Quote a swap. Pass `fromAmount` for direct, or `toAmount` for reverse. `flow: 'fixed-rate'` returns a rateId valid for ~20 minutes that you pass back into changenow_swap_create.", {
+    fromCurrency: z.string().min(2),
+    toCurrency: z.string().min(2),
+    fromAmount: z.number().positive().optional(),
+    toAmount: z.number().positive().optional(),
+    fromNetwork: z.string().optional(),
+    toNetwork: z.string().optional(),
+    flow: z.enum(["standard", "fixed-rate"]).optional(),
+    type: z.enum(["direct", "reverse"]).optional(),
+}, async (args) => text(await changenowEstimate(args)));
+server.tool("changenow_swap_create", "Create a swap. Returns the deposit address (payinAddress) — send fromCurrency to that address and ChangeNow forwards toCurrency to payoutAddress. Fixed-rate swaps require the rateId returned by changenow_estimate.", {
+    fromCurrency: z.string().min(2),
+    toCurrency: z.string().min(2),
+    fromAmount: z.union([z.number().positive(), z.string()]).optional(),
+    toAmount: z.union([z.number().positive(), z.string()]).optional(),
+    payoutAddress: z.string().min(8),
+    payoutExtraId: z.string().optional(),
+    refundAddress: z.string().optional(),
+    refundExtraId: z.string().optional(),
+    fromNetwork: z.string().optional(),
+    toNetwork: z.string().optional(),
+    flow: z.enum(["standard", "fixed-rate"]).optional(),
+    type: z.enum(["direct", "reverse"]).optional(),
+    rateId: z.string().optional(),
+    partner: z.string().optional(),
+}, async (args) => text(await changenowCreateSwap(args)));
+server.tool("changenow_swap_status", "Poll the status of a swap by ChangeNow swap id.", { id: z.string().min(4) }, async ({ id }) => text(await changenowSwapStatus(id)));
+server.tool("changenow_swap_list", "List historic swaps (paginated).", {
+    limit: z.number().int().min(1).max(200).optional(),
+    offset: z.number().int().min(0).optional(),
+    dateFrom: z.string().optional(),
+    dateTo: z.string().optional(),
+    status: z.string().optional(),
+}, async (args) => text(await changenowSwapList(args)));
+server.tool("changenow_fiat_estimate", "Quote a crypto → fiat (or fiat → crypto) sale. Off-ramp; KYC will be required at sell time.", {
+    fromCurrency: z.string().min(2),
+    toCurrency: z.string().min(2),
+    fromAmount: z.number().positive().optional(),
+    toAmount: z.number().positive().optional(),
+}, async (args) => text(await changenowFiatEstimate(args)));
+server.tool("changenow_fiat_sell_draft", "Draft a crypto-to-fiat sell payload. DOES NOT submit — fiat off-ramp requires KYC and irreversible bank transfers. Review the returned `draft.body` and submit manually after KYC clears.", {
+    fromCurrency: z.string().min(2),
+    toCurrency: z.string().min(2),
+    fromAmount: z.number().positive(),
+    payoutDetails: z.record(z.unknown()),
+    refundAddress: z.string().optional(),
+}, async (args) => text(await changenowFiatSellDraft(args)));
+server.tool("changenow_config_redacted", "Inspect the ChangeNow connector config (no secrets revealed).", {}, async () => text({ config: await changenowRedactedConfig() }));
 // ---------------------------------------------------------------------------
 // Secure traveler profiles (P15) — encrypted PII storage. Profiles supply
 // firstName / lastName / email / phone to vendor bookings without the agent
