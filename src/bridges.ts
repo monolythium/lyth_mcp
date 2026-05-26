@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { canonicalize } from "./runbooks.js";
 
-export type BridgeRouteType = "ibc" | "zk_light_client" | "trusted" | "issuer_native" | "manual";
+export type BridgeRouteType = "chainlink_ccip";
 export type BridgeRouteStatus = "active" | "draft" | "degraded" | "paused";
 
 export interface BridgeRegistry {
@@ -20,7 +20,8 @@ export interface BridgeRoute {
   id: string;
   displayName?: string;
   status: BridgeRouteStatus;
-  routeType: BridgeRouteType;
+  routeType: string;
+  feeToken?: string;
   sourceChain: string;
   destinationChain: string;
   sourceAsset: string;
@@ -91,7 +92,7 @@ export interface BridgeQuote {
 export interface BridgeRisk {
   level: "low" | "medium" | "high" | "blocked";
   reasons: string[];
-  trustModel: BridgeRouteType;
+  trustModel: string;
 }
 
 export interface BridgeCircuitAlert {
@@ -100,7 +101,7 @@ export interface BridgeCircuitAlert {
   code: string;
   message: string;
   routeStatus: BridgeRouteStatus;
-  routeType: BridgeRouteType;
+  routeType: string;
 }
 
 export async function loadBridgeRegistry(path: string): Promise<LoadedBridgeRegistry> {
@@ -196,6 +197,12 @@ export function quoteBridgeRoute(route: BridgeRoute, args: {
   if (route.status !== "active") {
     violations.push(`Route status is ${route.status}; this MCP will not treat it as executable.`);
   }
+  if (route.routeType !== "chainlink_ccip") {
+    violations.push(`Route ${route.id} is not a Chainlink CCIP route.`);
+  }
+  if ((route.feeToken ?? "").trim().toUpperCase() !== "LINK") {
+    violations.push(`Route ${route.id} must use LINK as the route fee token.`);
+  }
   if (route.circuitBreaker?.paused) {
     violations.push(`Circuit breaker is paused${route.circuitBreaker.reason ? `: ${route.circuitBreaker.reason}` : "."}`);
   }
@@ -213,9 +220,6 @@ export function quoteBridgeRoute(route: BridgeRoute, args: {
   }
   if (!route.insurance) {
     warnings.push("No insurance/backstop metadata is configured for this bridge route.");
-  }
-  if (route.routeType === "trusted") {
-    warnings.push("Trusted/transitional route keeps a longer cooldown because it relies on operators rather than light-client/zk verification.");
   }
   const estimatedFee = estimateFee(args.amount, route.fees);
   const estimatedReceiveAmount = subtractDecimal(args.amount, estimatedFee);
@@ -280,8 +284,11 @@ export function bridgeCircuitBreakerAlerts(registry: BridgeRegistry, args: {
     if (route.status !== "active") {
       alerts.push(alert(route, route.status === "paused" ? "critical" : "warning", "BridgeRouteNotActive", `Route ${route.id} status is ${route.status}; do not treat it as executable.`));
     }
-    if (route.routeType === "trusted") {
-      alerts.push(alert(route, "warning", "TrustedBridgeRoute", `Route ${route.id} is trusted/transitional and should keep a longer cooldown until zk/light-client replacement.`));
+    if (route.routeType !== "chainlink_ccip") {
+      alerts.push(alert(route, "critical", "BridgeRouteNotCcip", `Route ${route.id} is not configured as Chainlink CCIP.`));
+    }
+    if ((route.feeToken ?? "").trim().toUpperCase() !== "LINK") {
+      alerts.push(alert(route, "critical", "BridgeRouteFeeTokenNotLink", `Route ${route.id} does not use LINK as the route fee token.`));
     }
     if (!route.audits?.length) {
       alerts.push(alert(route, "warning", "MissingBridgeAuditMetadata", `Route ${route.id} has no audit metadata configured.`));
@@ -341,19 +348,15 @@ function riskForRoute(route: BridgeRoute, violations: string[], warnings: string
     reasons.push(...violations);
     return { level: "blocked", reasons, trustModel: route.routeType };
   }
-  if (route.routeType === "trusted" || route.status === "degraded") {
-    reasons.push("Route has trusted/degraded assumptions.");
+  if (route.routeType !== "chainlink_ccip" || (route.feeToken ?? "").trim().toUpperCase() !== "LINK") {
+    reasons.push("Route is outside the Chainlink CCIP + LINK scope.");
+    return { level: "blocked", reasons: [...reasons, ...warnings], trustModel: route.routeType };
+  }
+  if (route.status === "degraded") {
+    reasons.push("Route is degraded.");
     return { level: "high", reasons: [...reasons, ...warnings], trustModel: route.routeType };
   }
-  if (route.routeType === "manual") {
-    reasons.push("Manual route depends on off-chain operations.");
-    return { level: "high", reasons: [...reasons, ...warnings], trustModel: route.routeType };
-  }
-  if (route.routeType === "zk_light_client" || route.routeType === "ibc") {
-    reasons.push("Route uses light-client or zk verification assumptions.");
-    return { level: warnings.length ? "medium" : "low", reasons: [...reasons, ...warnings], trustModel: route.routeType };
-  }
-  reasons.push("Issuer-native route depends on issuer support and policy.");
+  reasons.push("Route is Chainlink CCIP scoped with LINK fees.");
   return { level: warnings.length ? "medium" : "low", reasons: [...reasons, ...warnings], trustModel: route.routeType };
 }
 
@@ -362,14 +365,11 @@ function routeScore(route: BridgeRoute): number {
   if (route.status === "active") {
     score += 100;
   }
-  if (route.routeType === "ibc" || route.routeType === "zk_light_client") {
+  if (route.routeType === "chainlink_ccip") {
     score += 20;
   }
-  if (route.routeType === "issuer_native") {
-    score += 15;
-  }
-  if (route.routeType === "trusted") {
-    score -= 20;
+  if ((route.feeToken ?? "").trim().toUpperCase() !== "LINK") {
+    score -= 100;
   }
   if (route.circuitBreaker?.paused) {
     score -= 100;

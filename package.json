@@ -35,9 +35,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
-    "@monolythium/core-sdk": "https://github.com/monolythium-vision/mono-core-sdk/archive/ffeb897e4b710b4ee993a0c78bdde3f505009ae6.tar.gz",
-    "@noble/curves": "^2.2.0",
-    "@noble/hashes": "^2.2.0",
+    "@monolythium/core-sdk": "https://github.com/monolythium/mono-core-sdk/archive/06760a857adb3643db6613f294de002a63557b04.tar.gz",
     "zod": "^3.25.0"
   },
   "devDependencies": {

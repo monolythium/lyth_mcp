@@ -1,4 +1,4 @@
-export type BridgeRouteType = "ibc" | "zk_light_client" | "trusted" | "issuer_native" | "manual";
+export type BridgeRouteType = "chainlink_ccip";
 export type BridgeRouteStatus = "active" | "draft" | "degraded" | "paused";
 export interface BridgeRegistry {
     schemaVersion?: number;
@@ -14,7 +14,8 @@ export interface BridgeRoute {
     id: string;
     displayName?: string;
     status: BridgeRouteStatus;
-    routeType: BridgeRouteType;
+    routeType: string;
+    feeToken?: string;
     sourceChain: string;
     destinationChain: string;
     sourceAsset: string;
@@ -82,7 +83,7 @@ export interface BridgeQuote {
 export interface BridgeRisk {
     level: "low" | "medium" | "high" | "blocked";
     reasons: string[];
-    trustModel: BridgeRouteType;
+    trustModel: string;
 }
 export interface BridgeCircuitAlert {
     routeId: string;
@@ -90,7 +91,7 @@ export interface BridgeCircuitAlert {
     code: string;
     message: string;
     routeStatus: BridgeRouteStatus;
-    routeType: BridgeRouteType;
+    routeType: string;
 }
 export declare function loadBridgeRegistry(path: string): Promise<LoadedBridgeRegistry>;
 export declare function bridgeRegistrySummary(loaded: LoadedBridgeRegistry): {
@@ -104,7 +105,7 @@ export declare function bridgeRegistrySummary(loaded: LoadedBridgeRegistry): {
     bytes: number;
     updatedAt: string | undefined;
     routeCount: number;
-    routeTypes: BridgeRouteType[];
+    routeTypes: string[];
     statuses: BridgeRouteStatus[];
     assets: string[];
 };
@@ -132,7 +133,7 @@ export declare function bridgeCooldownMatrix(registry: BridgeRegistry): {
     sourceChain: string;
     destinationChain: string;
     asset: string;
-    routeType: BridgeRouteType;
+    routeType: string;
     status: BridgeRouteStatus;
     cooldown: {
         epochs?: number;
@@ -153,7 +154,7 @@ export declare function bridgeStatusSummary(registry: BridgeRegistry): {
     routeId: string;
     displayName: string | undefined;
     status: BridgeRouteStatus;
-    routeType: BridgeRouteType;
+    routeType: string;
     circuitBreaker: {
         enabled?: boolean;
         paused?: boolean;

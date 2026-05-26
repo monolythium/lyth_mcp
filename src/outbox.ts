@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 const STORE_VERSION = 1;
 
 export type OutboxStatus = "signed" | "submitted" | "confirmed" | "failed" | "expired";
-export type OutboxKind = "eth_raw" | "lyth_encrypted";
+export type OutboxKind = "lyth_encrypted";
 
 export interface OutboxAttempt {
   at: string;

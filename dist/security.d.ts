@@ -76,7 +76,7 @@ export declare function bridgeBlastRadiusMonitor(ctx: SecurityContext, args?: {
         routeId: string;
         displayName: string | undefined;
         status: import("./bridges.js").BridgeRouteStatus;
-        routeType: import("./bridges.js").BridgeRouteType;
+        routeType: string;
         circuitBreaker: {
             enabled?: boolean;
             paused?: boolean;

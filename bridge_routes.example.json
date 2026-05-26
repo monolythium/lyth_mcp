@@ -2,26 +2,27 @@
   "schemaVersion": 1,
   "network": "testnet-69420",
   "issuer": "Monolythium MCP example registry",
-  "updatedAt": "2026-05-17T00:00:00.000Z",
+  "updatedAt": "2026-05-26T00:00:00.000Z",
   "epochHours": 14,
-  "disclaimer": "Example bridge route metadata for MCP planning. Routes are draft unless status is active.",
+  "disclaimer": "Example bridge route metadata for MCP planning. Chainlink CCIP with LINK fees is the only configured route scope.",
   "routes": [
     {
-      "id": "eth-usdc-to-mono-zk",
-      "displayName": "Ethereum finalized USDC to Mono USDC",
+      "id": "eth-usdc-to-mono-ccip",
+      "displayName": "Ethereum USDC to Mono USDC via Chainlink CCIP",
       "status": "draft",
-      "routeType": "zk_light_client",
+      "routeType": "chainlink_ccip",
+      "feeToken": "LINK",
       "sourceChain": "Ethereum",
       "destinationChain": "Monolythium",
       "sourceAsset": "USDC",
       "destinationAsset": "mUSDC",
       "cooldown": {
         "epochs": 1,
-        "label": "1 epoch (~14h) after zk/light-client cutover"
+        "label": "1 epoch (~14h) pending live CCIP route evidence"
       },
       "finality": {
-        "threshold": "Ethereum finalized checkpoint",
-        "notes": "Hard finality is minutes; cooldown is dominated by operational safety margin."
+        "threshold": "Chainlink CCIP route finality",
+        "notes": "Cooldown remains conservative until live route rows are available."
       },
       "fees": {
         "flat": "1",
@@ -42,121 +43,83 @@
         "paused": false
       },
       "trustAssumptions": [
-        "SP1/FRI proof verifies finalized Ethereum event inclusion.",
-        "Mono verifier precompile and route circuit must be audited before activation."
+        "Route requires live Chainlink CCIP metadata and LINK fee funding.",
+        "Mono route controls must expose finality, cap, and circuit-breaker data before activation."
       ],
-      "dependencies": ["Ethereum finality", "SP1 prover network", "Mono bridge verifier"],
+      "dependencies": ["Chainlink CCIP", "LINK fee funding", "Mono route-control surface"],
       "audits": [],
       "insurance": "TBD",
-      "upgradeAuthority": "TBD before mainnet",
-      "liquidityVenues": ["Mono native spot markets"],
-      "notes": ["Target route for replacing long human dispute windows."]
+      "upgradeAuthority": "TBD before activation",
+      "liquidityVenues": ["Mono native spot markets"]
     },
     {
-      "id": "cosmos-usdc-to-mono-ibc",
-      "displayName": "IBC USDC to Mono USDC",
+      "id": "eth-weth-to-mono-ccip",
+      "displayName": "Ethereum WETH to Mono WETH via Chainlink CCIP",
       "status": "draft",
-      "routeType": "ibc",
-      "sourceChain": "Cosmos",
+      "routeType": "chainlink_ccip",
+      "feeToken": "LINK",
+      "sourceChain": "Ethereum",
       "destinationChain": "Monolythium",
-      "sourceAsset": "USDC",
-      "destinationAsset": "mUSDC",
+      "sourceAsset": "WETH",
+      "destinationAsset": "mWETH",
       "cooldown": {
         "epochs": 1,
-        "label": "1 epoch target; lower possible after operations prove stable"
+        "label": "1 epoch (~14h) pending live CCIP route evidence"
       },
       "finality": {
-        "threshold": "IBC client finality",
-        "notes": "Single-slot style finality still keeps an operational cooldown at launch."
+        "threshold": "Chainlink CCIP route finality",
+        "notes": "Route remains draft until live CCIP rows are published."
       },
       "fees": {
-        "flat": "0.5",
-        "bps": 3,
-        "asset": "USDC"
+        "flat": "0.001",
+        "bps": 5,
+        "asset": "WETH"
       },
       "limits": {
-        "minAmount": "5",
-        "maxAmount": "100000"
+        "minAmount": "0.01",
+        "maxAmount": "1000"
       },
       "drainCap": {
-        "perEpoch": "250000",
-        "remaining": "250000",
-        "asset": "USDC"
+        "perEpoch": "2500",
+        "remaining": "2500",
+        "asset": "WETH"
       },
       "circuitBreaker": {
         "enabled": true,
         "paused": false
       },
-      "trustAssumptions": ["IBC light-client route with bounded operational cooldown."],
-      "dependencies": ["Source chain IBC client", "Mono IBC endpoint"],
+      "trustAssumptions": [
+        "Route requires live Chainlink CCIP metadata and LINK fee funding.",
+        "Mono route controls must expose finality, cap, and circuit-breaker data before activation."
+      ],
+      "dependencies": ["Chainlink CCIP", "LINK fee funding", "Mono route-control surface"],
       "audits": [],
       "insurance": "TBD",
-      "upgradeAuthority": "TBD before mainnet",
+      "upgradeAuthority": "TBD before activation",
       "liquidityVenues": ["Mono native spot markets"]
     },
     {
-      "id": "sol-usdc-to-mono-zk",
-      "displayName": "Solana USDC to Mono USDC",
+      "id": "btc-to-mono-ccip",
+      "displayName": "Tokenized BTC to Mono BTC via Chainlink CCIP",
       "status": "draft",
-      "routeType": "zk_light_client",
-      "sourceChain": "Solana",
+      "routeType": "chainlink_ccip",
+      "feeToken": "LINK",
+      "sourceChain": "Ethereum",
       "destinationChain": "Monolythium",
-      "sourceAsset": "USDC",
-      "destinationAsset": "mUSDC",
-      "cooldown": {
-        "epochs": 2,
-        "label": "1-2 epochs depending on finality confidence; default 2 epochs"
-      },
-      "finality": {
-        "threshold": "Finalized Solana slot plus route-specific safety margin",
-        "notes": "Cooldown is intentionally conservative until rollback/finality assumptions are battle-tested."
-      },
-      "fees": {
-        "flat": "1",
-        "bps": 8,
-        "asset": "USDC"
-      },
-      "limits": {
-        "minAmount": "10",
-        "maxAmount": "50000"
-      },
-      "drainCap": {
-        "perEpoch": "150000",
-        "remaining": "150000",
-        "asset": "USDC"
-      },
-      "circuitBreaker": {
-        "enabled": true,
-        "paused": false
-      },
-      "trustAssumptions": ["Solana finality proof circuit and source-chain client assumptions."],
-      "dependencies": ["Solana finality", "SP1 prover network", "Mono bridge verifier"],
-      "audits": [],
-      "insurance": "TBD",
-      "upgradeAuthority": "TBD before mainnet",
-      "liquidityVenues": ["Mono native spot markets"]
-    },
-    {
-      "id": "btc-to-mono-zk",
-      "displayName": "Bitcoin BTC to Mono BTC",
-      "status": "draft",
-      "routeType": "zk_light_client",
-      "sourceChain": "Bitcoin",
-      "destinationChain": "Monolythium",
-      "sourceAsset": "BTC",
+      "sourceAsset": "WBTC",
       "destinationAsset": "mBTC",
       "cooldown": {
         "epochs": 2,
-        "label": "2 epochs (~28h) or value-tiered limits"
+        "label": "2 epochs (~28h) pending live CCIP route evidence"
       },
       "finality": {
-        "threshold": "6+ confirmations plus value-tiered safety window",
-        "notes": "Bitcoin reorg history justifies a larger launch buffer."
+        "threshold": "Chainlink CCIP route finality",
+        "notes": "BTC-denominated wrapped routes keep a larger draft cap and cooldown."
       },
       "fees": {
         "flat": "0.0001",
         "bps": 5,
-        "asset": "BTC"
+        "asset": "WBTC"
       },
       "limits": {
         "minAmount": "0.001",
@@ -165,62 +128,22 @@
       "drainCap": {
         "perEpoch": "25",
         "remaining": "25",
-        "asset": "BTC"
-      },
-      "circuitBreaker": {
-        "enabled": true,
-        "paused": false
-      },
-      "trustAssumptions": ["Bitcoin header/finality proof circuit and route-specific withdrawal limits."],
-      "dependencies": ["Bitcoin headers", "SP1 prover network", "Mono bridge verifier"],
-      "audits": [],
-      "insurance": "TBD",
-      "upgradeAuthority": "TBD before mainnet",
-      "liquidityVenues": ["Mono native spot markets"]
-    },
-    {
-      "id": "trusted-usdc-transitional",
-      "displayName": "Trusted transitional USDC route",
-      "status": "draft",
-      "routeType": "trusted",
-      "sourceChain": "Ethereum",
-      "destinationChain": "Monolythium",
-      "sourceAsset": "USDC",
-      "destinationAsset": "mUSDC",
-      "cooldown": {
-        "hours": 168,
-        "label": "7 days until zk/light-client route replaces it"
-      },
-      "finality": {
-        "threshold": "Operator attestations plus manual dispute window",
-        "notes": "Kept only as a transitional fallback model."
-      },
-      "fees": {
-        "flat": "2",
-        "bps": 20,
-        "asset": "USDC"
-      },
-      "limits": {
-        "minAmount": "10",
-        "maxAmount": "25000"
-      },
-      "drainCap": {
-        "perEpoch": "50000",
-        "remaining": "50000",
-        "asset": "USDC"
+        "asset": "WBTC"
       },
       "circuitBreaker": {
         "enabled": true,
         "paused": true,
-        "reason": "Trusted route is example-only and should not be used while zk route is being designed."
+        "reason": "Awaiting live Chainlink CCIP route rows."
       },
-      "trustAssumptions": ["Federated operators or multisig can censor or fail.", "Human dispute window is required."],
-      "dependencies": ["Operator set", "Manual monitoring"],
+      "trustAssumptions": [
+        "Route requires live Chainlink CCIP metadata and LINK fee funding.",
+        "Mono route controls must expose finality, cap, and circuit-breaker data before activation."
+      ],
+      "dependencies": ["Chainlink CCIP", "LINK fee funding", "Mono route-control surface"],
       "audits": [],
       "insurance": "TBD",
-      "upgradeAuthority": "Operator multisig",
-      "liquidityVenues": ["Mono native spot markets"],
-      "notes": ["This route exists to explain why trusted bridges keep longer cooldowns."]
+      "upgradeAuthority": "TBD before activation",
+      "liquidityVenues": ["Mono native spot markets"]
     }
   ]
 }

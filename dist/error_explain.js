@@ -102,10 +102,10 @@ const RULES = [
         retryable: false,
         severity: "blocked",
         plainEnglish: "The bridge route is not currently safe or executable.",
-        likelyCause: "The route may be draft, paused, over cap, missing a configured path, or using a longer trusted cooldown.",
+        likelyCause: "The route may be draft, paused, over cap, missing Chainlink CCIP metadata, or missing LINK fee-token metadata.",
         actions: [
             "Run bridge_quote and bridge_circuit_breaker_watch for the asset/route.",
-            "Prefer active IBC or zk-light-client routes over trusted/transitional routes.",
+            "Use only active Chainlink CCIP routes with LINK fee-token metadata.",
         ],
     },
     {

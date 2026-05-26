@@ -45,8 +45,7 @@ export function securityStatus(ctx: SecurityContext) {
   const components = [
     mempoolPosture(ctx.rpcHealth),
     ferveoPosture(),
-    zkVerifierPosture(ctx.bridgeRegistry),
-    ibcPosture(ctx.bridgeRegistry),
+    ccipBridgePosture(ctx.bridgeRegistry),
     oraclePosture(ctx.clusterRegistry),
     riscVmGatePosture(),
     walletPosture(ctx.wallets, ctx.outboxEntries),
@@ -264,17 +263,16 @@ export function recoveryRunbookDraft(args: {
 
 export function auditResearchGateDashboard(ctx: SecurityContext) {
   const bridgeRoutes = ctx.bridgeRegistry.routes;
-  const zkRoutes = bridgeRoutes.filter((route) => route.routeType === "zk_light_client");
-  const ibcRoutes = bridgeRoutes.filter((route) => route.routeType === "ibc");
+  const ccipRoutes = bridgeRoutes.filter((route) => route.routeType === "chainlink_ccip");
+  const ccipLinkRoutes = ccipRoutes.filter((route) => (route.feeToken ?? "").trim().toUpperCase() === "LINK");
   const gates = [
     gate("zkml_verifier", "TODO(mainnet)", "No live zkML verifier registry is exposed to the MCP yet.", "critical_for_zkml"),
     gate("riscv_vm", "TODO(core)", "Rust/RISC-V contract VM gate is not queryable from MCP yet.", "critical_for_contracts"),
     gate("mrc_standards", "TODO(core/indexer)", "MRC assets are represented by local registry labels only.", "critical_for_tokens_nfts"),
     gate("evm_retirement", "MCP_READY", "MCP gives explicit no-EVM guidance; core removal/readiness must be checked in mono-core.", "strategy"),
-    gate("fri_stark_verifier", zkRoutes.some((route) => route.status === "active") ? "WATCH" : "TODO(mainnet)", `${zkRoutes.length} zk-light-client route(s) in local registry.`, "critical_for_bridges"),
+    gate("chainlink_ccip", ccipLinkRoutes.some((route) => route.status === "active") ? "WATCH" : "TODO(mainnet)", `${ccipLinkRoutes.length} Chainlink CCIP + LINK route(s) in local registry.`, "critical_for_bridges"),
     gate("ferveo", "TODO(core/indexer)", "Ferveo threshold/decryption status is not exposed to MCP yet.", "critical_for_mempool"),
     gate("oracle", hasOracleService(ctx.clusterRegistry) ? "LOCAL_METADATA" : "TODO(core/indexer)", "Oracle service posture is local cluster metadata only.", "critical_for_markets"),
-    gate("ibc", ibcRoutes.some((route) => route.status === "active") ? "WATCH" : "LOCAL_DRAFT", `${ibcRoutes.length} IBC route(s) in local registry.`, "critical_for_liquidity"),
     gate("dag_sync", "TODO(core/indexer)", "DAG sync/finality health needs signed chain telemetry.", "critical_for_consensus"),
   ];
   return {
@@ -308,23 +306,20 @@ function ferveoPosture() {
   return component("ferveo_threshold", "watch", "Ferveo threshold/decryption status is not queryable from MCP yet.", ["TODO(mainnet): read signed threshold status from core/indexer."]);
 }
 
-function zkVerifierPosture(registry: BridgeRegistry) {
-  const zkRoutes = registry.routes.filter((route) => route.routeType === "zk_light_client");
-  if (zkRoutes.length === 0) {
-    return component("zk_verifier_backend", "degraded", "No zk-light-client bridge route metadata exists.", ["Bridge zk verifier readiness cannot be assessed."]);
+function ccipBridgePosture(registry: BridgeRegistry) {
+  const ccipRoutes = registry.routes.filter((route) => route.routeType === "chainlink_ccip");
+  if (ccipRoutes.length === 0) {
+    return component("chainlink_ccip_bridge", "degraded", "No Chainlink CCIP route metadata exists.", ["Bridge route readiness cannot be assessed."]);
   }
-  const activeUnaudited = zkRoutes.filter((route) => route.status === "active" && !route.audits?.length);
+  const nonLinkRoutes = ccipRoutes.filter((route) => (route.feeToken ?? "").trim().toUpperCase() !== "LINK");
+  if (nonLinkRoutes.length > 0) {
+    return component("chainlink_ccip_bridge", "critical", "CCIP route(s) are missing LINK fee-token metadata.", nonLinkRoutes.map((route) => route.id));
+  }
+  const activeUnaudited = ccipRoutes.filter((route) => route.status === "active" && !route.audits?.length);
   if (activeUnaudited.length > 0) {
-    return component("zk_verifier_backend", "critical", "Active zk route(s) are missing audit metadata.", activeUnaudited.map((route) => route.id));
+    return component("chainlink_ccip_bridge", "critical", "Active CCIP route(s) are missing audit metadata.", activeUnaudited.map((route) => route.id));
   }
-  return component("zk_verifier_backend", "watch", `${zkRoutes.length} zk route(s) are present in local metadata.`, ["Activation still requires audited verifier/circuit data."]);
-}
-
-function ibcPosture(registry: BridgeRegistry) {
-  const ibcRoutes = registry.routes.filter((route) => route.routeType === "ibc");
-  return ibcRoutes.length
-    ? component("ibc_hardening", "watch", `${ibcRoutes.length} IBC route(s) configured locally.`, ["TODO(mainnet): verify light-client freshness and route hardening from core/indexer."])
-    : component("ibc_hardening", "degraded", "No IBC route metadata configured.", []);
+  return component("chainlink_ccip_bridge", "watch", `${ccipRoutes.length} Chainlink CCIP route(s) are present in local metadata.`, ["Activation still requires live route rows from core/indexer."]);
 }
 
 function oraclePosture(registry?: ClusterRegistry) {
