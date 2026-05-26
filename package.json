@@ -35,7 +35,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
-    "@monolythium/core-sdk": "https://github.com/monolythium/mono-core-sdk/archive/06760a857adb3643db6613f294de002a63557b04.tar.gz",
+    "@monolythium/core-sdk": "0.2.2",
     "zod": "^3.25.0"
   },
   "devDependencies": {
