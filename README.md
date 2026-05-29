@@ -73,24 +73,24 @@ The MCP is allowed to help. The user controls funding, policy, passphrases, and 
 Global install from GitHub:
 
 ```bash
-npm install -g https://github.com/monolythium-vision/lyth_mcp/archive/refs/heads/main.tar.gz
+npm install -g https://github.com/monolythium/lyth_mcp/archive/refs/heads/main.tar.gz
 ```
 
 If you specifically want npm's git resolver, use `--install-links=true` with npm 10:
 
 ```bash
-npm install -g --install-links=true git+https://github.com/monolythium-vision/lyth_mcp.git
+npm install -g --install-links=true git+https://github.com/monolythium/lyth_mcp.git
 ```
 
 From this repository:
 
 ```bash
-cd repos/monolythium-vision/lyth_mcp
+cd repos/monolythium/lyth_mcp
 npm install
 npm run build
 ```
 
-`@monolythium/core-sdk` is installed from the public GitHub repo `monolythium-vision/mono-core-sdk` through a pinned HTTPS tarball, so this MCP can be installed outside the local monorepo without a nested git build.
+`@monolythium/core-sdk` is installed from the public GitHub repo `monolythium/mono-core-sdk` through a pinned HTTPS tarball, so this MCP can be installed outside the local monorepo without a nested git build.
 
 Run the server over stdio:
 
@@ -113,7 +113,7 @@ After building, add an MCP server entry like this:
   "mcpServers": {
     "lyth-mcp": {
       "command": "node",
-      "args": ["/absolute/path/to/monolythium-vision/lyth_mcp/dist/index.js"],
+      "args": ["/absolute/path/to/monolythium/lyth_mcp/dist/index.js"],
       "env": {
         "LYTH_NETWORK": "testnet-69420",
         "LYTH_CHAIN_ID": "69420",
@@ -122,7 +122,7 @@ After building, add an MCP server entry like this:
         "LYTH_MCP_HOT_KEY": "/absolute/path/to/.lyth_mcp/hot.key",
         "LYTH_MCP_LOCAL_KEY": "/absolute/path/to/.lyth_mcp/local.key",
         "LYTH_MCP_ADDRESSBOOK": "/absolute/path/to/.lyth_mcp/addressbook.json",
-        "LYTH_MCP_VENDOR_REGISTRY": "/absolute/path/to/monolythium-vision/lyth_mcp/vendors.example.json"
+        "LYTH_MCP_VENDOR_REGISTRY": "/absolute/path/to/monolythium/lyth_mcp/vendors.example.json"
       }
     }
   }
@@ -189,7 +189,7 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `bridge_blast_radius` | Summarize affected bridge routes, local bridge/swap receipts, signed bridge payloads, and freeze recommendations |
 | `recovery_status` | Show recovery posture and available recovery runbooks for local agent wallets |
 | `recovery_runbook_draft` | Draft pause, drain, delete, stale-outbox release, or future emergency-key recovery steps |
-| `audit_gate_dashboard` | Track local audit/research gates for zkML, RISC-V VM, MRC, FRI/STARK, Ferveo, oracle, IBC, and DAG sync |
+| `audit_gate_dashboard` | Track local audit/research gates for zkML, RISC-V VM, MRC, FRI/STARK, Ferveo, oracle, and DAG sync |
 | `readiness_check` | Show mainnet-readiness gates for no-EVM, MRC, commerce, bridge, wallet, runbooks, security, docs, and tests |
 | `account_overview` | Get balance, nonce, label, profile, and flow for an address |
 | `recent_transactions` | Read recent transactions from `lyth_txFeed` |
@@ -398,7 +398,7 @@ Use `contract_path_guidance` when a user asks to deploy Solidity or EVM bytecode
 
 ## Security And Readiness Dashboards
 
-Use `security_status` for a compact threat posture summary. It checks local RPC/write readiness, bridge verifier posture, IBC route posture, oracle service metadata, RISC-V VM gate status, local hot-wallet pressure, and signed outbox pressure.
+Use `security_status` for a compact threat posture summary. It checks local RPC/write readiness, bridge verifier posture, bridge route posture, oracle service metadata, RISC-V VM gate status, local hot-wallet pressure, and signed outbox pressure.
 
 Use `emergency_state_watch` when something looks wrong. It surfaces no-write RPC state, paused bridge routes, stale signed payloads, repeated failed broadcasts, and the current TODO(mainnet) gap for G3/PQ emergency declarations.
 
@@ -427,7 +427,7 @@ By default, the MCP loads `bridge_routes.example.json`. These routes are plannin
 The registry lets an assistant answer:
 
 - which USDC/ETH/BTC routes exist;
-- whether the route is IBC, zk-light-client, trusted, issuer-native, or manual;
+- whether the route is zk-light-client, trusted, issuer-native, or manual;
 - cooldown by source chain and trust model;
 - route fees, limits, drain caps, circuit-breaker status, finality threshold, and trust assumptions.
 
@@ -439,7 +439,6 @@ The bundled cooldown posture is:
 
 | Route family | Suggested cooldown |
 |---|---|
-| IBC/Cosmos-style finality | 1 epoch, maybe lower later |
 | Ethereum finalized events | 1 epoch after zk/light-client verification |
 | Solana | 1-2 epochs depending on finality confidence |
 | Bitcoin | 2 epochs or value-tiered limits |
@@ -534,7 +533,7 @@ Then the assistant can build and sign a small transfer without asking for the pa
 ```json
 {
   "walletName": "agent-main",
-  "to": "0x1111111111111111111111111111111111111111",
+  "to": "mono1zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg357f9at",
   "amount": "9",
   "sign": true,
   "allowLowValueSigning": true,
@@ -547,7 +546,7 @@ Named contacts can be stored in the local addressbook and then used directly as 
 ```json
 {
   "name": "Neo",
-  "address": "0x2aa62149ac3a7f9316afeb299bbd17a4dcbb70b6",
+  "address": "mono192nzzjdv8flex940av5eh0gh5nwtku9k5kehrm",
   "tags": ["team"]
 }
 ```
@@ -622,7 +621,7 @@ The assistant drafts:
 {
   "runbook": "pay_vendor",
   "fields": {
-    "recipient": "0x1111111111111111111111111111111111111111",
+    "recipient": "mono1zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg357f9at",
     "vendorId": "pizza-demo",
     "amount": "10",
     "asset": "LYTH",
@@ -646,9 +645,9 @@ If valid, it calls `prepare_wallet_request` with the user's `from` address:
 ```json
 {
   "runbook": "pay_vendor",
-  "from": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "from": "mono142424242424242424242424242424242ga9n5c",
   "fields": {
-    "recipient": "0x1111111111111111111111111111111111111111",
+    "recipient": "mono1zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg357f9at",
     "vendorId": "pizza-demo",
     "amount": "10",
     "asset": "LYTH",
@@ -671,8 +670,8 @@ The MCP returns a wallet request:
   "method": "eth_sendTransaction",
   "params": [
     {
-      "from": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "to": "0x1111111111111111111111111111111111111111",
+      "from": "mono142424242424242424242424242424242ga9n5c",
+      "to": "mono1zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg357f9at",
       "value": "0x8ac7230489e80000",
       "data": "0x",
       "chainId": "0x10f2c"
@@ -689,7 +688,7 @@ The wallet must render that request and the user must approve it.
 {
   "runbook": "request_funds",
   "fields": {
-    "agentAddress": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "agentAddress": "mono1hwamhwamhwamhwamhwamhwamhwamhwam6rjwp2",
     "amount": "50",
     "asset": "LYTH",
     "purpose": "Legal review agent budget"
@@ -723,7 +722,7 @@ Shape:
       "id": "pizza-demo",
       "displayName": "Pizza Demo Vendor",
       "category": "food",
-      "address": "0x1111111111111111111111111111111111111111",
+      "address": "mono1zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg357f9at",
       "acceptedAssets": ["LYTH"],
       "maxOrderAmount": "25",
       "serviceTags": ["pizza", "delivery"],

@@ -9,7 +9,7 @@ The bundled `vendors.example.json` is a local demo registry. It is useful for te
   "id": "pizza-demo",
   "displayName": "Pizza Demo Vendor",
   "category": "food",
-  "address": "0x1111111111111111111111111111111111111111",
+  "address": "mono1zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg357f9at",
   "acceptedAssets": ["LYTH"],
   "maxOrderAmount": "100",
   "serviceTags": ["pizza", "delivery", "demo"],

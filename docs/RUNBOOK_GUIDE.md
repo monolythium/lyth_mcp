@@ -38,7 +38,7 @@ Example:
 {
   "runbook": "pay_vendor",
   "fields": {
-    "recipient": "0x1111111111111111111111111111111111111111",
+    "recipient": "mono1zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg357f9at",
     "vendorId": "pizza-demo",
     "amount": "10",
     "asset": "LYTH",
