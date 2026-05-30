@@ -913,28 +913,22 @@ Run:
 npm start
 ```
 
-## External Commerce (EVM, x402, NOWPayments, Travala, Coinsbee)
+## External Commerce (NOWPayments, ChangeNow, Travala, Coinsbee, Duffel)
 
-An optional surface lets the agent reach mainstream crypto-commerce vendors using a separate, low-value **EVM hot wallet** (secp256k1, encrypted), the [x402](https://github.com/coinbase/x402) payment protocol, and ERC-8004 agent identity. It is sandbox-first and broadcasts are off unless `LYTH_MCP_ENABLE_EVM_SUBMIT=1`.
+An optional surface lets the agent reach mainstream crypto-commerce vendors through hosted payment processors and travel connectors. There is no EVM hot wallet, x402, or ERC-8004 agent-identity surface — Monolythium is a no-EVM chain (see `contract_path_guidance` / `readiness_check gate=no_evm`). Payment connectors are sandbox-first: settlement runs through the vendor's own processor, and lyth_mcp builds, signs, and tracks locally rather than custodying funds.
 
-Quick map:
+Quick map (every tool listed below is registered by the server):
 
 | Need | Tools |
 |---|---|
-| Create / fund / cap an EVM agent wallet | `evm_wallet_create`, `evm_wallet_fund_request`, `evm_wallet_limits`, `evm_wallet_pause`, `evm_wallet_delete` |
-| Native + ERC-20 transfers | `evm_native_transfer`, `erc20_transfer`, `erc20_approve`, `erc20_allowance`, `evm_token_list` |
-| RPC health | `evm_rpc_health` |
-| Pay any x402 resource | `x402_vendor_policy_set`, `x402_pay` |
-| Agent attribution | `agent_identity_set_local`, `agent_identity_get`, `agent_identity_register_guide` |
-| NOWPayments | `nowpayments_configure`, `nowpayments_estimate`, `nowpayments_payment_create`, `nowpayments_invoice_create`, `nowpayments_payment_status`, `nowpayments_ipn_verify` |
-| Travala (book + pay via x402) | `travala_info`, `travala_book_pay`, `travala_book_recover`, `travala_proxy_call` |
+| NOWPayments (crypto checkout) | `nowpayments_configure`, `nowpayments_config_redacted`, `nowpayments_status`, `nowpayments_currencies`, `nowpayments_merchant_coins`, `nowpayments_estimate`, `nowpayments_payment_create`, `nowpayments_invoice_create`, `nowpayments_payment_status`, `nowpayments_payment_list`, `nowpayments_refund_draft`, `nowpayments_ipn_verify` |
+| ChangeNow (swap / fiat) | `changenow_configure`, `changenow_config_redacted`, `changenow_status`, `changenow_currencies`, `changenow_min_amount`, `changenow_estimate`, `changenow_swap_create`, `changenow_swap_status`, `changenow_swap_list`, `changenow_fiat_estimate`, `changenow_fiat_sell_draft` |
+| Travala (hosted MCP proxy) | `travala_info`, `travala_proxy_call`, `travala_book_recover`, `travala_flight_capability_probe` |
 | Coinsbee (interim NOWPayments path) | `coinsbee_guide`, `coinsbee_via_nowpayments_track` |
 | Secure traveler profiles (encrypted PII) | `profile_create`, `profile_update`, `profile_list`, `profile_get`, `profile_reveal`, `profile_delete`, `profile_store_info` |
-| Flights via Duffel (real catalog) | `duffel_configure`, `flight_search`, `flight_offer_get`, `flight_seat_maps`, `flight_order_create_hold`, `flight_order_create_instant`, `flight_order_pay`, `flight_order_get`, `flight_order_list`, `flight_order_cancel`, `flight_order_cancel_confirm` |
-| Flights via crypto OTA + NOWPayments | `flight_ota_nowpayments_track`, `travala_flight_capability_probe` |
+| Flights via Duffel (real catalog) | `duffel_configure`, `duffel_config_redacted`, `flight_search`, `flight_offer_get`, `flight_seat_maps`, `flight_order_create_hold`, `flight_order_create_instant`, `flight_order_pay`, `flight_order_get`, `flight_order_list`, `flight_order_cancel`, `flight_order_cancel_confirm` |
+| Flights via crypto OTA + NOWPayments | `flight_ota_nowpayments_track` |
 | Readiness | `readiness_check gate=external_commerce` |
-
-Full walkthroughs (setup, examples, recovery, production switch checklist) live in `docs/EXTERNAL_COMMERCE.md`.
 
 ## Additional Docs
 
