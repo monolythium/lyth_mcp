@@ -6,7 +6,10 @@ import { dirname, join } from "node:path";
 const STORE_VERSION = 1;
 
 export type OutboxStatus = "signed" | "submitted" | "confirmed" | "failed" | "expired";
-export type OutboxKind = "lyth_encrypted";
+// `lyth_plaintext` -> mesh_submitTx (the working path on the live
+// optional-encryption chain). `lyth_encrypted` -> lyth_submitEncrypted
+// (PREVIEW: threshold-encrypted inclusion is not live yet).
+export type OutboxKind = "lyth_plaintext" | "lyth_encrypted";
 
 export interface OutboxAttempt {
   at: string;

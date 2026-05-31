@@ -8,10 +8,22 @@
  * - prepares wallet approval payloads;
  * - stores local MCP wallets only as encrypted PQM-1 mnemonics;
  * - never broadcasts unless LYTH_MCP_ENABLE_SUBMIT=1 is explicitly set.
+ *
+ * On-chain tx submission goes through the SDK 0.3.11 PLAINTEXT path
+ * (mesh_submitTx) by default — the inclusion path that confirms on the
+ * live optional-encryption chain. The threshold-encrypted path
+ * (lyth_submitEncrypted) is an opt-in PREVIEW and is not live yet.
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import {
+  clampPriorityTip,
+  EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER,
+  MIN_EXECUTION_UNIT_PRICE_LYTHOSHI,
+  TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT,
+  type ExecutionUnitPriceResponse,
+} from "@monolythium/core-sdk";
 import { randomUUID } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1313,12 +1325,63 @@ function commerceSafetyForVendor(args: {
   });
 }
 
-function outboxMethod(_kind: OutboxKind): "lyth_submitEncrypted" {
-  return "lyth_submitEncrypted";
+function outboxMethod(kind: OutboxKind): "mesh_submitTx" | "lyth_submitEncrypted" {
+  // Plaintext bincode SignedTransaction goes through mesh_submitTx — the
+  // functional inclusion path on the live optional-encryption chain. The
+  // encrypted envelope path (lyth_submitEncrypted) is a not-yet-live preview.
+  return kind === "lyth_encrypted" ? "lyth_submitEncrypted" : "mesh_submitTx";
 }
 
-async function submitPayload(endpoint: string, kind: OutboxKind, payloadHex: string): Promise<string> {
-  return rpcCall(endpoint, outboxMethod(kind), [payloadHex]);
+async function submitPayload(
+  endpoint: string,
+  kind: OutboxKind,
+  payloadHex: string,
+  expectedTxHashHex?: string,
+): Promise<string> {
+  const method = outboxMethod(kind);
+  const echoed = await rpcCall<string>(endpoint, method, [payloadHex]);
+  // mesh_submitTx echoes the canonical 32-byte native tx hash on admission.
+  // Reject any mismatch loud so a wallet never trusts a hash it did not
+  // derive itself (mirrors TxClient::submit_plaintext in the SDK).
+  if (method === "mesh_submitTx" && expectedTxHashHex) {
+    const echoedNorm = String(echoed).toLowerCase();
+    if (!/^0x[0-9a-f]{64}$/.test(echoedNorm)) {
+      throw new Error(`mesh_submitTx returned a non-32-byte tx hash: ${echoed}`);
+    }
+    if (echoedNorm !== expectedTxHashHex.toLowerCase()) {
+      throw new Error(
+        `mesh_submitTx echoed tx hash ${echoed} does not match locally computed ${expectedTxHashHex}`,
+      );
+    }
+  }
+  return echoed;
+}
+
+/**
+ * Resolve sane per-unit fee parameters using the SDK 0.3.11 defaults: take
+ * the live `lyth_executionUnitPrice` quote, apply the SDK safety multiplier
+ * as headroom, clamp up to the SDK price floor, and clamp the priority tip
+ * to the resolved cap (the plaintext path reverts FeeMismatch otherwise).
+ * Falls back to the SDK floor when the node has no quote.
+ */
+async function resolveSaneFee(
+  endpoint: string,
+  opts: { gasLimit?: bigint; priorityTip?: bigint } = {},
+): Promise<{ gasLimit: bigint; maxFeePerGas: bigint; maxPriorityFeePerGas: bigint }> {
+  const gasLimit = opts.gasLimit ?? TRANSFER_DEFAULT_EXECUTION_UNIT_LIMIT;
+  let quote = MIN_EXECUTION_UNIT_PRICE_LYTHOSHI;
+  try {
+    const res = await rpcCall<ExecutionUnitPriceResponse>(endpoint, "lyth_executionUnitPrice", []);
+    quote = BigInt(res.executionUnitPriceLythoshi);
+  } catch {
+    quote = MIN_EXECUTION_UNIT_PRICE_LYTHOSHI;
+  }
+  let maxFeePerGas = quote * EXECUTION_UNIT_PRICE_SAFETY_MULTIPLIER;
+  if (maxFeePerGas < MIN_EXECUTION_UNIT_PRICE_LYTHOSHI) {
+    maxFeePerGas = MIN_EXECUTION_UNIT_PRICE_LYTHOSHI;
+  }
+  const maxPriorityFeePerGas = clampPriorityTip(opts.priorityTip ?? maxFeePerGas, maxFeePerGas);
+  return { gasLimit, maxFeePerGas, maxPriorityFeePerGas };
 }
 
 function mdTable(headers: string[], rows: string[][]): string {
@@ -2581,8 +2644,8 @@ server.tool(
     to: z.string().describe("0x recipient address or exact addressbook contact name."),
     amount: z.string().optional().describe("LYTH amount. Omit to drain balance minus estimated fee."),
     passphrase: z.string().min(12).optional(),
-    sign: z.boolean().optional().describe("Sign encrypted envelope. Default true."),
-    broadcast: z.boolean().optional().describe("Broadcast signed envelope. Requires LYTH_MCP_ENABLE_SUBMIT=1."),
+    sign: z.boolean().optional().describe("Sign the transaction. Default true."),
+    broadcast: z.boolean().optional().describe("Broadcast the signed plaintext payload via mesh_submitTx. Requires LYTH_MCP_ENABLE_SUBMIT=1."),
     confirm: z.literal("DRAIN_AGENT_WALLET"),
   },
   async ({ name, to, amount, passphrase, sign, broadcast }) => {
@@ -2596,13 +2659,11 @@ server.tool(
     if (!wallet) {
       return errorText(`wallet '${name}' not found`);
     }
-    const gasLimit = 21000n;
-    let fee = 1_000_000_000n;
-    try {
-      fee = parseQuantity(await rpcCall<string>(endpoint, "eth_gasPrice", []));
-    } catch {
-      fee = 1_000_000_000n;
-    }
+    // SDK 0.3.11 sane fee defaults (resolved from lyth_executionUnitPrice).
+    const saneFee = await resolveSaneFee(endpoint);
+    const gasLimit = saneFee.gasLimit;
+    const fee = saneFee.maxFeePerGas;
+    const priority = saneFee.maxPriorityFeePerGas;
     const amountUnits = amount
       ? decimalToUnits(amount)
       : parseQuantity(await rpcCall<string>(endpoint, "eth_getBalance", [wallet.address, "latest"])) - gasLimit * fee;
@@ -2643,9 +2704,8 @@ server.tool(
       violations: preflight.violations,
       warnings: preflight.warnings,
     });
-    const encryptionKey = shouldSign
-      ? encryptionKeyFromRpc(await rpcCall<{ algo?: string; epoch: number | string; encapsulationKey: string }>(endpoint, "lyth_getEncryptionKey", []))
-      : undefined;
+    // Drain always uses the working plaintext mesh_submitTx path; no
+    // encryption key is fetched (the encrypted path is preview-only).
     const built = await buildTransfer({
       walletName: name,
       to: recipient.address,
@@ -2654,23 +2714,24 @@ server.tool(
       nonce: resolvedNonce,
       gasLimit,
       maxFeePerGas: fee,
-      maxPriorityFeePerGas: fee,
+      maxPriorityFeePerGas: priority,
       passphrase,
-      encryptionKey,
       sign: shouldSign,
+      private: false,
       allowLowValueSigning: false,
       allowLocalKeySigning: true,
     });
     if (shouldSign && !built.signed) {
       return errorText("drain signing requires a passphrase; low-value signing is disabled for drains");
     }
+    const drainSubmitMethod = built.signed?.submitMethod ?? "mesh_submitTx";
     const outboxEntry = built.signed
       ? await addOutboxEntry({
           network: NETWORK,
           chainId: CHAIN_ID,
-          kind: "lyth_encrypted",
-          method: "lyth_submitEncrypted",
-          payloadHex: built.signed.encryptedEnvelopeHex,
+          kind: "lyth_plaintext",
+          method: drainSubmitMethod,
+          payloadHex: built.signed.signedTxWireHex!,
           walletName: name,
           from: wallet.address,
           to: recipient.address,
@@ -2678,26 +2739,26 @@ server.tool(
           asset: "LYTH",
           nonce: toQuantity(resolvedNonce),
           expiresAt: defaultOutboxExpiresAt(),
-          note: "Created by agent_wallet_drain.",
+          note: "Created by agent_wallet_drain (plaintext mesh_submitTx).",
         })
       : null;
     let submitted: Record<string, unknown> | null = null;
     let broadcastError: Record<string, unknown> | null = null;
     if (broadcast && built.signed) {
       if (!SUBMIT_ENABLED) {
-        broadcastError = { endpoint, method: "lyth_submitEncrypted", message: "Broadcast disabled. Set LYTH_MCP_ENABLE_SUBMIT=1." };
+        broadcastError = { endpoint, method: drainSubmitMethod, message: "Broadcast disabled. Set LYTH_MCP_ENABLE_SUBMIT=1." };
       } else {
         try {
-          const txHash = await submitPayload(endpoint, "lyth_encrypted", built.signed.encryptedEnvelopeHex);
-          submitted = { endpoint, method: "lyth_submitEncrypted", txHash };
+          const txHash = await submitPayload(endpoint, "lyth_plaintext", built.signed.signedTxWireHex!, built.signed.innerTxHashHex);
+          submitted = { endpoint, method: drainSubmitMethod, txHash };
           if (outboxEntry) {
-            await recordOutboxAttempt(outboxEntry.id, { at: new Date().toISOString(), endpoint, method: "lyth_submitEncrypted", ok: true, txHash });
+            await recordOutboxAttempt(outboxEntry.id, { at: new Date().toISOString(), endpoint, method: drainSubmitMethod, ok: true, txHash });
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          broadcastError = { endpoint, method: "lyth_submitEncrypted", message };
+          broadcastError = { endpoint, method: drainSubmitMethod, message };
           if (outboxEntry) {
-            await recordOutboxAttempt(outboxEntry.id, { at: new Date().toISOString(), endpoint, method: "lyth_submitEncrypted", ok: false, error: message });
+            await recordOutboxAttempt(outboxEntry.id, { at: new Date().toISOString(), endpoint, method: drainSubmitMethod, ok: false, error: message });
           }
         }
       }
@@ -2709,7 +2770,7 @@ server.tool(
     const errorExplanation = broadcastError
       ? explainError({
           errorMessage: String(broadcastError.message ?? ""),
-          rpcMethod: "lyth_submitEncrypted",
+          rpcMethod: drainSubmitMethod,
           tool: "agent_wallet_drain",
           outboxId: outboxEntry?.id,
           context: { broadcastError, preflight },
@@ -3904,21 +3965,23 @@ server.tool(
 
 server.tool(
   "wallet_build_transfer",
-  "Build a native LYTH transfer from a stored MCP wallet. Can sign with passphrase or low-value hot mode. Broadcast is optional and gated. If broadcast fails, retry the returned signed payload with submit_signed_transaction; do not rebuild.",
+  "Build and (optionally) submit a native LYTH transfer from a stored MCP wallet. Default submission is the PLAINTEXT mesh_submitTx path, which is what confirms on the live optional-encryption chain. Can sign with passphrase or low-value hot mode. Broadcast is gated by LYTH_MCP_ENABLE_SUBMIT=1. If broadcast fails, retry the returned signed payload with submit_signed_transaction; do not rebuild.",
   {
     walletName: z.string().min(1),
     to: z.string().describe("0x recipient address or exact addressbook contact name."),
     amount: z.string().describe("LYTH amount, e.g. 1.5."),
     passphrase: z.string().min(12).optional().describe("Required above low-value cap or when low-value mode is disabled."),
-    sign: z.boolean().optional().describe("Sign encrypted envelope. Default true."),
+    sign: z.boolean().optional().describe("Sign the transaction. Default true."),
+    private: z.boolean().optional().describe("PREVIEW (default false): build a threshold-ENCRYPTED submission (lyth_submitEncrypted). Encrypted inclusion is NOT live yet, so a private tx will NOT confirm on the current chain. Leave false to use the working plaintext mesh_submitTx path."),
     allowLowValueSigning: z.boolean().optional().describe("Allow no-passphrase signing when within configured cap. Default true."),
-    broadcast: z.boolean().optional().describe("Broadcast signed encrypted envelope. Requires LYTH_MCP_ENABLE_SUBMIT=1."),
-    gasLimit: z.string().optional().describe("Hex or decimal gas limit. Default 21000."),
-    maxFeePerGas: z.string().optional().describe("Hex or decimal fee. Defaults to eth_gasPrice or 1 gwei fallback."),
-    maxPriorityFeePerGas: z.string().optional().describe("Hex or decimal priority fee. Defaults to maxFeePerGas."),
+    broadcast: z.boolean().optional().describe("Broadcast the signed payload. Requires LYTH_MCP_ENABLE_SUBMIT=1."),
+    gasLimit: z.string().optional().describe("Hex or decimal execution-unit limit. Defaults to the SDK sane transfer default (100000)."),
+    maxFeePerGas: z.string().optional().describe("Hex or decimal per-unit max execution price (lythoshi). Defaults to the SDK sane fee resolved from lyth_executionUnitPrice."),
+    maxPriorityFeePerGas: z.string().optional().describe("Hex or decimal per-unit priority tip (lythoshi). Clamped to maxFeePerGas by the SDK. Defaults to the resolved cap."),
     nonce: z.string().optional().describe("Hex or decimal nonce. Defaults to live eth_getTransactionCount."),
   },
-  async ({ walletName, to, amount, passphrase, sign, allowLowValueSigning, broadcast, gasLimit, maxFeePerGas, maxPriorityFeePerGas, nonce }) => {
+  async ({ walletName, to, amount, passphrase, sign, private: isPrivate, allowLowValueSigning, broadcast, gasLimit, maxFeePerGas, maxPriorityFeePerGas, nonce }) => {
+    const usePrivate = isPrivate === true;
     const recipient = await resolveRecipient(to);
     if (!recipient) {
       return errorText("to must be a 0x wire address or exact addressbook contact name");
@@ -3931,17 +3994,16 @@ server.tool(
       return errorText(`wallet '${walletName}' not found`);
     }
     const resolvedNonce = nonce ? parseFlexibleBigint(nonce) : parseQuantity(await rpcCall<string>(endpoint, "eth_getTransactionCount", [wallet.address, "latest"]));
-    let fee = maxFeePerGas ? parseFlexibleBigint(maxFeePerGas) : 1_000_000_000n;
-    if (!maxFeePerGas) {
-      try {
-        fee = parseQuantity(await rpcCall<string>(endpoint, "eth_gasPrice", []));
-      } catch {
-        fee = 1_000_000_000n;
-      }
-    }
-    const priority = maxPriorityFeePerGas ? parseFlexibleBigint(maxPriorityFeePerGas) : fee;
+    // SDK 0.3.11 sane fee defaults: resolved from the live execution-unit
+    // price, priority tip clamped to the max price. Caller overrides honored.
+    const saneFee = await resolveSaneFee(endpoint, {
+      gasLimit: gasLimit ? parseFlexibleBigint(gasLimit) : undefined,
+      priorityTip: maxPriorityFeePerGas ? parseFlexibleBigint(maxPriorityFeePerGas) : undefined,
+    });
+    const fee = maxFeePerGas ? parseFlexibleBigint(maxFeePerGas) : saneFee.maxFeePerGas;
+    const priority = clampPriorityTip(maxPriorityFeePerGas ? parseFlexibleBigint(maxPriorityFeePerGas) : saneFee.maxPriorityFeePerGas, fee);
     const amountUnits = decimalToUnits(amount);
-    const resolvedGasLimit = gasLimit ? parseFlexibleBigint(gasLimit) : 21000n;
+    const resolvedGasLimit = saneFee.gasLimit;
     const preflight = await preflightTransfer({
       endpoint,
       walletName,
@@ -3960,7 +4022,8 @@ server.tool(
       return errorJson({ recipient, preflight });
     }
     const balance = preflight.checks.balance as { estimatedFeeCeiling?: string; remainingAfterCeiling?: string } | undefined;
-    const encryptionKey = shouldSign
+    // The encryption key is only needed for the (preview) private path.
+    const encryptionKey = shouldSign && usePrivate
       ? encryptionKeyFromRpc(await rpcCall<{ algo?: string; epoch: number | string; encapsulationKey: string }>(endpoint, "lyth_getEncryptionKey", []))
       : undefined;
     const built = await buildTransfer({
@@ -3975,6 +4038,7 @@ server.tool(
       passphrase,
       encryptionKey,
       sign: shouldSign,
+      private: usePrivate,
       allowLowValueSigning: shouldSign ? allowLowValueSigning ?? true : false,
     });
     if (shouldSign && !built.signed) {
@@ -3994,13 +4058,18 @@ server.tool(
       violations: preflight.violations,
       warnings: preflight.warnings,
     });
+    const submitKind: OutboxKind = built.signed?.privacy === "encrypted" ? "lyth_encrypted" : "lyth_plaintext";
+    const submitMethod = built.signed?.submitMethod ?? outboxMethod(submitKind);
+    const submitPayloadHex = built.signed
+      ? (built.signed.privacy === "encrypted" ? built.signed.encryptedEnvelopeHex! : built.signed.signedTxWireHex!)
+      : undefined;
     const outboxEntry = built.signed
       ? await addOutboxEntry({
           network: NETWORK,
           chainId: CHAIN_ID,
-          kind: "lyth_encrypted",
-          method: "lyth_submitEncrypted",
-          payloadHex: built.signed.encryptedEnvelopeHex,
+          kind: submitKind,
+          method: submitMethod,
+          payloadHex: submitPayloadHex!,
           walletName,
           from: wallet.address,
           to: recipient.address,
@@ -4010,7 +4079,9 @@ server.tool(
           expiresAt: defaultOutboxExpiresAt(),
           policySnapshot: built.lowValuePolicy ?? wallet.lowValue,
           lowValueReserved: built.lowValuePolicy?.used === true,
-          note: "Created by wallet_build_transfer. Retry this payload from the outbox instead of rebuilding after transient broadcast failure.",
+          note: built.signed.privacy === "encrypted"
+            ? "Created by wallet_build_transfer (PRIVATE PREVIEW). Encrypted inclusion is not live yet; this envelope will not confirm. Retry from the outbox after threshold-encrypted inclusion ships."
+            : "Created by wallet_build_transfer (plaintext mesh_submitTx). Retry this payload from the outbox instead of rebuilding after transient broadcast failure.",
         })
       : null;
     let submitted: Record<string, unknown> | null = null;
@@ -4019,28 +4090,28 @@ server.tool(
       if (!SUBMIT_ENABLED) {
         broadcastError = {
           endpoint,
-          method: "lyth_submitEncrypted",
+          method: submitMethod,
           message: "Broadcast disabled. Set LYTH_MCP_ENABLE_SUBMIT=1 to allow wallet_build_transfer broadcast.",
         };
-      } else if (!built.signed) {
+      } else if (!built.signed || !submitPayloadHex) {
         broadcastError = {
           endpoint,
-          method: "lyth_submitEncrypted",
+          method: submitMethod,
           message: "Cannot broadcast unsigned transfer",
         };
       } else {
         try {
-          const txHash = await submitPayload(endpoint, "lyth_encrypted", built.signed.encryptedEnvelopeHex);
+          const txHash = await submitPayload(endpoint, submitKind, submitPayloadHex, built.signed.innerTxHashHex);
           submitted = {
             endpoint,
-            method: "lyth_submitEncrypted",
+            method: submitMethod,
             txHash,
           };
           if (outboxEntry) {
             await recordOutboxAttempt(outboxEntry.id, {
               at: new Date().toISOString(),
               endpoint,
-              method: "lyth_submitEncrypted",
+              method: submitMethod,
               ok: true,
               txHash,
             });
@@ -4052,14 +4123,14 @@ server.tool(
           const message = err instanceof Error ? err.message : String(err);
           broadcastError = {
             endpoint,
-            method: "lyth_submitEncrypted",
+            method: submitMethod,
             message,
           };
           if (outboxEntry) {
             await recordOutboxAttempt(outboxEntry.id, {
               at: new Date().toISOString(),
               endpoint,
-              method: "lyth_submitEncrypted",
+              method: submitMethod,
               ok: false,
               error: message,
             });
@@ -4070,7 +4141,7 @@ server.tool(
     const errorExplanation = broadcastError
       ? explainError({
           errorMessage: String(broadcastError.message ?? ""),
-          rpcMethod: "lyth_submitEncrypted",
+          rpcMethod: submitMethod,
           tool: "wallet_build_transfer",
           outboxId: outboxEntry?.id,
           context: { broadcastError, preflight },
@@ -4114,8 +4185,8 @@ server.tool(
               ...(outboxEntry
                 ? { id: outboxEntry.id }
                 : {
-                    kind: "lyth_encrypted",
-                    payloadHex: built.signed.encryptedEnvelopeHex,
+                    kind: submitKind,
+                    payloadHex: submitPayloadHex,
                   }),
             },
             warning: "If broadcast failed, retry this exact signed payload. Do not call wallet_build_transfer again unless you intentionally want a new signed transfer and a new low-value allowance reservation.",
@@ -4907,8 +4978,8 @@ server.tool(
   "submit_signed_transaction",
   "Broadcast an already-signed transaction/envelope. Disabled unless LYTH_MCP_ENABLE_SUBMIT=1. This tool never signs.",
   {
-    kind: z.literal("lyth_encrypted").default("lyth_encrypted").describe("Native encrypted envelopes use lyth_submitEncrypted."),
-    payloadHex: z.string().describe("0x-prefixed signed raw transaction or encrypted envelope hex."),
+    kind: z.enum(["lyth_plaintext", "lyth_encrypted"]).default("lyth_plaintext").describe("lyth_plaintext -> mesh_submitTx (working path). lyth_encrypted -> lyth_submitEncrypted (PREVIEW: encrypted inclusion not live, will not confirm)."),
+    payloadHex: z.string().describe("0x-prefixed signed plaintext SignedTransaction hex (plaintext) or encrypted envelope hex (encrypted preview)."),
     outboxId: z.string().optional().describe("Optional local outbox id to update with the broadcast attempt."),
     allowExpired: z.boolean().optional().describe("Allow submitting an outbox payload after local reservation expiry. Default false."),
   },
