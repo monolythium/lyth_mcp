@@ -27,6 +27,7 @@ const commerceSafety = await import("../dist/commerce_safety.js");
 const riskRenderer = await import("../dist/risk_renderer.js");
 const errorExplain = await import("../dist/error_explain.js");
 const clusters = await import("../dist/clusters.js");
+const charter = await import("../dist/charter.js");
 const delegation = await import("../dist/delegation.js");
 const nodes = await import("../dist/nodes.js");
 const walletSafety = await import("../dist/wallet_safety.js");
@@ -177,6 +178,32 @@ const foundationClusters = clusters.listClusters(clusterRegistry.registry, { fou
 const decentralizationClusters = clusters.listClusters(clusterRegistry.registry, { foundationControlled: false, minOpenSeats: 1 });
 const operator = clusters.getOperator(clusterRegistry.registry, "atlas-provers");
 const monarch = clusters.monarchOperatorAssistant(clusterRegistry.registry, { operatorId: "atlas-provers", serviceType: "prover" });
+
+// Service-reward charter (offline): validation + consent-digest + round-trip.
+const charterDraft = charter.buildUpdateCharterDraft({
+  clusterId: 1,
+  memberShares: [2500, 2500, 2500, 2500, 0, 0, 0, 0, 0, 0],
+  delegatorShareBps: 2500,
+});
+assert(charterDraft.valid === true, "expected charter draft to validate");
+assert(charterDraft.charter.bytes === 30, "expected 30-byte charter wire payload");
+assert(/^0x[0-9a-f]+$/.test(charterDraft.sign.consentDigest), "expected hex consent digest");
+assert(charterDraft.sign.signersRequired === 7, "expected 7-of-cluster update threshold");
+assert(charterDraft.charter.decoded.delegatorShareBps === 2500, "expected charter round-trip to preserve delegator share");
+let badMemberSum = false;
+try {
+  charter.buildUpdateCharterDraft({ clusterId: 1, memberShares: [2000, 2000, 2000, 1000, 0, 0, 0, 0, 0, 0], delegatorShareBps: 2500 });
+} catch {
+  badMemberSum = true;
+}
+assert(badMemberSum, "expected member-share sum != 10000 to be rejected");
+let belowFloor = false;
+try {
+  charter.buildUpdateCharterDraft({ clusterId: 1, memberShares: [2500, 2500, 2500, 2500, 0, 0, 0, 0, 0, 0], delegatorShareBps: 1500 });
+} catch {
+  belowFloor = true;
+}
+assert(belowFloor, "expected delegator share below the 2000 bps floor to be rejected");
 const delegationCap = delegation.explainDelegationCaps({
   phase: "growth",
   totalDelegatedStake: "1000",

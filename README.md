@@ -260,6 +260,9 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `prover_service_search` | Search local GPU prover service tiers |
 | `gpu_proof_market_assistant` | Route bridge/zkML/generic proof requests to local GPU prover service tiers |
 | `oracle_service_search` | Search local oracle service tiers |
+| `charter_read` | Read a cluster's live active + pending economics charter (Law §6.8): member shares, delegator share, effective epoch |
+| `update_charter_draft` | Build + validate an offline `updateCharter` draft (Σ member = 10000 bps, delegator ≥ 2000 bps floor) and return the consent digest to sign |
+| `service_score_per_cluster` | Read the live per-cluster ServiceScore (Component A, Law §7) plus the base/diversity/service term reads — the "rewards = proved service" view |
 | `vendor_registry_info` | Show registry hashes, issuer, expiry, signature status, and categories |
 | `vendor_get` | Get one vendor by id |
 | `provider_onboarding_draft` | Draft vendor registry, merchant policy, availability, and connector metadata |
@@ -465,6 +468,8 @@ Use `monarch_operator_assistant` for node-operator planning: cluster health, 7-o
 By default, node-level tools load `nodes.example.json`. Use `node_attestation_get`, `node_pcr_explain`, `node_diversity_score`, and `node_hosting_class` to explain TPM/PCR posture, measured-boot mismatches, ASN/provider/country diversity, and hosting risk. These tools only inspect local placeholder metadata; they do not verify TPM quote signatures.
 
 Use `prover_service_search`, `rpc_service_search`, `archive_service_search`, and `oracle_service_search` for service-tier routing. Use `gpu_proof_market_assistant` when an assistant needs to route a bridge, zkML, or generic proof request to a prover service with fee/latency assumptions. `ask_chain` routes questions such as "Show EU clusters with GPU prover service" and "Which clusters maximize decentralization for my stake?" into these typed tools and returns the local registry hash it used.
+
+Unlike the cluster/operator/node planning tools above (which read bundled metadata), the service-reward tools read the **live chain** through `@monolythium/core-sdk`. Use `service_score_per_cluster` for the "rewards = proved service" view (Component A, Law §7): the settled per-cluster ServiceScore plus the base/availability term (cluster status), the diversity term (ASN/geo/hosting spread), and the archive/prover/rpc/indexer service terms. Use `charter_read` to read a cluster's active + pending economics charter (Component H, Law §6.8) — per-operator member shares, the delegator share, and the pending amendment's effective epoch. Use `update_charter_draft` to build and validate an `updateCharter` amendment offline (it enforces Σ member shares = 10000 bps and the 2000 bps delegator floor, returns the 30-byte charter payload plus the per-signer ML-DSA-65 consent digest, and never assembles submittable calldata or broadcasts).
 
 Every cluster/operator/node response includes TODO(mainnet) assumptions. Production needs signed cluster metadata, live quorum/uptime/slashing feeds, TPM/PCR attestation, service-capacity feeds, and delegation cap checks from core/indexer.
 

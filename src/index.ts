@@ -9,10 +9,14 @@
  * - stores local MCP wallets only as encrypted PQM-1 mnemonics;
  * - never broadcasts unless LYTH_MCP_ENABLE_SUBMIT=1 is explicitly set.
  *
- * On-chain tx submission goes through the SDK 0.3.11 PLAINTEXT path
+ * On-chain tx submission goes through the SDK 0.4.17 PLAINTEXT path
  * (mesh_submitTx) by default — the inclusion path that confirms on the
  * live optional-encryption chain. The threshold-encrypted path
  * (lyth_submitEncrypted) is an opt-in PREVIEW and is not live yet.
+ *
+ * Service-reward surface: charter_read / update_charter_draft /
+ * service_score_per_cluster wrap the SDK 0.4.x Component-H (cluster
+ * charters, Law §6.8) and Component-A (per-cluster ServiceScore) reads.
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -139,6 +143,12 @@ import {
   type ClusterServiceType,
   type ClusterStatus,
 } from "./clusters.js";
+import {
+  buildUpdateCharterDraft,
+  clusterServiceScoreReport,
+  listLiveClusters,
+  readClusterCharter,
+} from "./charter.js";
 import {
   autovoteSimulate,
   delegateDraft,
@@ -288,13 +298,11 @@ import {
 
 const DEFAULT_CHAIN_ID = 69420;
 const DEFAULT_NETWORK = "testnet-69420";
+// Live service-reward chain (genesis
+// 0x11774775b5c3bfc36ecb9c37e7252b49898caaacdb55668de3913fe60c660258).
+// Override with LYTH_RPC_URLS for a different fleet.
 const DEFAULT_RPCS = [
-  "http://178.105.15.216:8545",
-  "http://178.104.233.182:8545",
-  "http://65.108.94.1:8545",
-  "http://95.216.154.155:8545",
-  "http://87.99.145.48:8545",
-  "http://5.223.85.76:8545",
+  "http://178.105.12.9:8545",
 ];
 
 const RPCS = (process.env.LYTH_RPC_URLS ?? process.env.LYTH_RPC_URL ?? "")
@@ -1358,7 +1366,7 @@ async function submitPayload(
 }
 
 /**
- * Resolve sane per-unit fee parameters using the SDK 0.3.11 defaults: take
+ * Resolve sane per-unit fee parameters using the SDK 0.4.17 defaults: take
  * the live `lyth_executionUnitPrice` quote, apply the SDK safety multiplier
  * as headroom, clamp up to the SDK price floor, and clamp the priority tip
  * to the resolved cap (the plaintext path reverts FeeMismatch otherwise).
@@ -1906,6 +1914,9 @@ const MCP_TOOL_NAMES = [
   "recovery_runbook_draft",
   "audit_gate_dashboard",
   "readiness_check",
+  "charter_read",
+  "update_charter_draft",
+  "service_score_per_cluster",
   "demo_connector_templates",
   "demo_connector_get",
   "demo_connector_draft",
@@ -2659,7 +2670,7 @@ server.tool(
     if (!wallet) {
       return errorText(`wallet '${name}' not found`);
     }
-    // SDK 0.3.11 sane fee defaults (resolved from lyth_executionUnitPrice).
+    // SDK 0.4.17 sane fee defaults (resolved from lyth_executionUnitPrice).
     const saneFee = await resolveSaneFee(endpoint);
     const gasLimit = saneFee.gasLimit;
     const fee = saneFee.maxFeePerGas;
@@ -3994,7 +4005,7 @@ server.tool(
       return errorText(`wallet '${walletName}' not found`);
     }
     const resolvedNonce = nonce ? parseFlexibleBigint(nonce) : parseQuantity(await rpcCall<string>(endpoint, "eth_getTransactionCount", [wallet.address, "latest"]));
-    // SDK 0.3.11 sane fee defaults: resolved from the live execution-unit
+    // SDK 0.4.17 sane fee defaults: resolved from the live execution-unit
     // price, priority tip clamped to the max price. Caller overrides honored.
     const saneFee = await resolveSaneFee(endpoint, {
       gasLimit: gasLimit ? parseFlexibleBigint(gasLimit) : undefined,
@@ -6541,6 +6552,73 @@ server.tool(
     limit: z.number().min(1).max(100).optional(),
   },
   async (args) => text(await serviceSearchResponse("oracle", args)),
+);
+
+server.tool(
+  "charter_read",
+  "Read a cluster's live ACTIVE + PENDING economics charter (Law §6.8): per-operator member shares (bps), the delegator share, and the pending amendment's effective epoch. Reads the live service-reward chain via the SDK Component-H wrappers.",
+  {
+    clusterId: z.number().int().min(0).describe("On-chain cluster id (e.g. 0, 1)."),
+  },
+  async ({ clusterId }) => {
+    const endpoint = await firstReachableEndpoint();
+    return text(await readClusterCharter(endpoint, clusterId));
+  },
+);
+
+server.tool(
+  "update_charter_draft",
+  "Build + validate an updateCharter DRAFT (Law §6.8): enforces Σ member shares = 10000 bps and delegator ≥ 2000 bps floor, then returns the 30-byte charter payload, the per-signer ML-DSA-65 consent digest to sign, and the governance flow. OFFLINE — does NOT assemble submittable calldata or broadcast.",
+  {
+    clusterId: z.number().int().min(0).describe("On-chain cluster id."),
+    memberShares: z
+      .array(z.number().int().min(0).max(10000))
+      .length(10)
+      .describe("10 per-member operator-pot shares in bps, member-declaration order (active 0..7, standby 7..10); must sum to 10000."),
+    delegatorShareBps: z
+      .number()
+      .int()
+      .min(2000)
+      .max(10000)
+      .describe("Delegator share of the cluster pot in bps; >= 2000 (floor)."),
+    expiresMs: z.number().int().positive().optional().describe("Consent expiry as a Unix ms timestamp. Default now + 1h."),
+  },
+  async ({ clusterId, memberShares, delegatorShareBps, expiresMs }) => {
+    try {
+      return text(buildUpdateCharterDraft({ clusterId, memberShares, delegatorShareBps, expiresMs }));
+    } catch (error) {
+      return errorJson({ ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
+  },
+);
+
+server.tool(
+  "service_score_per_cluster",
+  "Show the live per-cluster ServiceScore — the 'rewards = proved service' story (Component A, Law §7). Returns the settled aggregate ServiceScore plus the term reads that compose it (base/availability via cluster status, diversity via asn/geo/hosting spread, and the archive/prover/rpc/indexer service terms). Omit clusterId to report every live cluster.",
+  {
+    clusterId: z.number().int().min(0).optional().describe("On-chain cluster id; omit to scan all live clusters."),
+  },
+  async ({ clusterId }) => {
+    const endpoint = await firstReachableEndpoint();
+    if (clusterId !== undefined) {
+      return text(await clusterServiceScoreReport(endpoint, clusterId));
+    }
+    const clusters = await listLiveClusters(endpoint);
+    const reports = await Promise.all(
+      clusters.map((cluster) => clusterServiceScoreReport(endpoint, cluster.clusterId)),
+    );
+    return text({
+      endpoint,
+      network: NETWORK,
+      chainId: CHAIN_ID,
+      clusterCount: clusters.length,
+      clusters: reports,
+      story: [
+        "Each cluster's ServiceScore gates its slice of the reward pot; the charter then splits that slice across operators and delegators.",
+        "Use charter_read / update_charter_draft to inspect or amend the split.",
+      ],
+    });
+  },
 );
 
 server.tool("vendor_registry_info", "Show vendor registry metadata, hashes, signature status, and category summary.", {}, async () => {
