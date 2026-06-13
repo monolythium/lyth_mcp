@@ -668,6 +668,16 @@ async function probeEndpoint(endpoint: string) {
   }
 }
 
+// A method that the fleet explicitly disables (-32045) or has not wired
+// (-32047) is NOT an endpoint fault. The live optional-encryption chain
+// runs the plaintext mesh_submitTx path, so the encrypted-mempool reads
+// (lyth_mempoolStatus, lyth_getEncryptionKey) are commonly off and must
+// not quarantine an otherwise healthy read/write endpoint.
+function isUnavailableMethodError(reason: unknown): boolean {
+  const msg = reason instanceof Error ? reason.message : String(reason);
+  return /\bRPC -3204[57]\b/.test(msg) || /method disabled|not wired|upstream unavailable/i.test(msg);
+}
+
 async function scoreEndpoint(endpoint: string) {
   const probe = await probeEndpoint(endpoint);
   const checks: Record<string, unknown> = {};
@@ -695,6 +705,9 @@ async function scoreEndpoint(endpoint: string) {
   }
   if (mempool.status === "fulfilled") {
     checks.mempool = mempool.value;
+  } else if (isUnavailableMethodError(mempool.reason)) {
+    // Encrypted mempool is an opt-in preview; disabled here is expected.
+    checks.mempool = { disabled: true, note: mempool.reason?.message ?? String(mempool.reason) };
   } else {
     score -= 25;
     checks.mempool = { error: mempool.reason?.message ?? String(mempool.reason) };
@@ -707,18 +720,25 @@ async function scoreEndpoint(endpoint: string) {
     checks.sync = { error: sync.reason?.message ?? String(sync.reason) };
     warnings.push("sync status unavailable");
   }
+  // The encryption key only matters for the NOT-YET-LIVE encrypted submit
+  // path. When it is unwired/disabled on a fleet that confirms plaintext tx,
+  // surface it informationally without penalizing write-readiness.
+  const encryptionKeyOptional = encryptionKey.status === "rejected" && isUnavailableMethodError(encryptionKey.reason);
   if (encryptionKey.status === "fulfilled") {
     checks.encryptionKey = encryptionKey.value;
+  } else if (encryptionKeyOptional) {
+    checks.encryptionKey = { disabled: true, note: encryptionKey.reason?.message ?? String(encryptionKey.reason) };
   } else {
     score -= 25;
     checks.encryptionKey = { error: encryptionKey.reason?.message ?? String(encryptionKey.reason) };
     warnings.push("encryption key unavailable");
   }
+  const encryptionKeyOk = encryptionKey.status === "fulfilled" || encryptionKeyOptional;
   const normalizedScore = Math.max(0, Math.min(100, score));
   return {
     ...probe,
     score: normalizedScore,
-    writeReady: probe.ok && normalizedScore >= 70 && encryptionKey.status === "fulfilled",
+    writeReady: probe.ok && normalizedScore >= 70 && encryptionKeyOk,
     quarantined: !probe.ok || normalizedScore < 50,
     warnings,
     checks,
@@ -4226,13 +4246,31 @@ server.tool(
       rpcCall(endpoint, "lyth_addressFlow", [address, flowLimit ?? 25]),
       rpcCall(endpoint, "lyth_getAddressLabel", [address]),
     ]);
+    // The eth_* readers only accept 0x wire addresses; canonical mono1
+    // display addresses are rejected. lyth_addressProfile accepts both and
+    // carries the native balance + nonce, so derive them from the profile
+    // when the eth_* path could not answer (e.g. a mono1 query).
+    const profileValue = profile.status === "fulfilled" ? (profile.value as Record<string, unknown>) : null;
+    const profileAccount = profileValue && typeof profileValue.account === "object" && profileValue.account
+      ? (profileValue.account as Record<string, unknown>)
+      : null;
+    const balanceOut = balance.status === "fulfilled"
+      ? balance.value
+      : profileAccount && typeof profileAccount.nativeBalanceLythoshi === "string"
+        ? { lythoshi: profileAccount.nativeBalanceLythoshi, source: "lyth_addressProfile" }
+        : { error: balance.reason?.message ?? String(balance.reason) };
+    const nonceOut = nonce.status === "fulfilled"
+      ? parseQuantity(nonce.value).toString()
+      : profileAccount && typeof profileAccount.nonce === "number"
+        ? String(profileAccount.nonce)
+        : { error: nonce.reason?.message ?? String(nonce.reason) };
     return text({
       network: NETWORK,
       chainId: CHAIN_ID,
       endpoint,
       address,
-      balance: balance.status === "fulfilled" ? balance.value : { error: balance.reason?.message ?? String(balance.reason) },
-      nonce: nonce.status === "fulfilled" ? parseQuantity(nonce.value).toString() : { error: nonce.reason?.message ?? String(nonce.reason) },
+      balance: balanceOut,
+      nonce: nonceOut,
       profile: profile.status === "fulfilled" ? profile.value : { error: profile.reason?.message ?? String(profile.reason) },
       flow: flow.status === "fulfilled" ? flow.value : { error: flow.reason?.message ?? String(flow.reason) },
       label: label.status === "fulfilled" ? label.value : { error: label.reason?.message ?? String(label.reason) },
