@@ -1,14 +1,10 @@
 import {
-  buildEncryptedSubmission,
   buildPlaintextSubmission,
   bytesToHex,
   generatePqm1Mnemonic,
-  hexToBytes,
   MlDsa65Backend,
   pqm1MnemonicToAddress,
   pqm1MnemonicToMlDsa65Backend,
-  type EncryptedSubmission,
-  type EncryptionKey,
   type NativeEvmTxFields,
   type PlaintextSubmission,
 } from "@monolythium/core-sdk/crypto";
@@ -132,17 +128,13 @@ export interface BuiltTransfer {
   signed?: {
     mode: "passphrase" | "local_machine_key" | "low_value";
     /**
-     * Submission path this build will broadcast through.
-     * - `plaintext` -> `mesh_submitTx` (the working path on the live
-     *   optional-encryption chain, `encrypted_mempool_required = false`).
-     * - `encrypted` -> `lyth_submitEncrypted` (PREVIEW: threshold-encrypted
-     *   inclusion is not live yet, so encrypted submissions do not confirm).
+     * Submission path this build will broadcast through. The chain runs a
+     * plaintext mempool, so builds always target `mesh_submitTx`.
      */
-    privacy: "plaintext" | "encrypted";
-    submitMethod: "mesh_submitTx" | "lyth_submitEncrypted";
+    submitMethod: "mesh_submitTx";
     /**
      * Canonical native tx hash the node echoes/validates on the plaintext
-     * path, and the inner tx hash wallets track for the encrypted path.
+     * path.
      */
     innerTxHashHex: string;
     signedInnerTxHex: string;
@@ -150,14 +142,9 @@ export interface BuiltTransfer {
     innerWireBytes: number;
     /**
      * Bincode `SignedTransaction` wire hex, submitted verbatim through the
-     * plaintext `mesh_submitTx` path. Present for plaintext builds.
+     * plaintext `mesh_submitTx` path.
      */
-    signedTxWireHex?: string;
-    /**
-     * Threshold-encrypted envelope hex for the `lyth_submitEncrypted` PREVIEW
-     * path. Present only for `private` builds.
-     */
-    encryptedEnvelopeHex?: string;
+    signedTxWireHex: string;
   };
   lowValuePolicy?: {
     used: boolean;
@@ -427,17 +414,9 @@ export async function buildTransfer(args: {
   maxPriorityFeePerGas: bigint;
   input?: string;
   passphrase?: string;
-  encryptionKey?: EncryptionKey;
   sign?: boolean;
   allowLowValueSigning?: boolean;
   allowLocalKeySigning?: boolean;
-  /**
-   * Opt IN to the threshold-encrypted PREVIEW submission path. Default
-   * false -> the working plaintext `mesh_submitTx` path. When true, an
-   * `encryptionKey` is required and the build targets `lyth_submitEncrypted`
-   * (which does not confirm until threshold-encrypted inclusion ships).
-   */
-  private?: boolean;
 }): Promise<BuiltTransfer> {
   const record = await getWallet(args.walletName);
   const tx: NativeEvmTxFields = {
@@ -483,42 +462,18 @@ export async function buildTransfer(args: {
   if (signer !== null) {
     const backend = signer.backend;
     const signed = backend.signEvmTx(tx);
-    if (args.private === true) {
-      // PREVIEW path: threshold-encrypted inclusion is not live yet.
-      if (!args.encryptionKey) {
-        throw new Error("encryptionKey is required when building a private (encrypted) transaction");
-      }
-      const encrypted: EncryptedSubmission = await buildEncryptedSubmission({
-        backend,
-        tx,
-        encryptionKey: args.encryptionKey,
-      });
-      built.signed = {
-        mode: signer.mode,
-        privacy: "encrypted",
-        submitMethod: "lyth_submitEncrypted",
-        innerTxHashHex: encrypted.innerTxHashHex,
-        signedInnerTxHex: `0x${signed.wireHex}`,
-        innerSighashHex: encrypted.innerSighashHex,
-        innerWireBytes: encrypted.innerWireBytes,
-        encryptedEnvelopeHex: encrypted.envelopeWireHex,
-      };
-    } else {
-      // Default WORKING path: plaintext bincode SignedTransaction submitted
-      // verbatim through mesh_submitTx (the inclusion path on a chain running
-      // with encrypted_mempool_required = false).
-      const plaintext: PlaintextSubmission = buildPlaintextSubmission({ backend, tx });
-      built.signed = {
-        mode: signer.mode,
-        privacy: "plaintext",
-        submitMethod: "mesh_submitTx",
-        innerTxHashHex: plaintext.innerTxHashHex,
-        signedInnerTxHex: `0x${signed.wireHex}`,
-        innerSighashHex: plaintext.innerSighashHex,
-        innerWireBytes: plaintext.innerWireBytes,
-        signedTxWireHex: plaintext.signedTxWireHex,
-      };
-    }
+    // Plaintext bincode SignedTransaction submitted verbatim through
+    // mesh_submitTx — the inclusion path on the plaintext mempool.
+    const plaintext: PlaintextSubmission = buildPlaintextSubmission({ backend, tx });
+    built.signed = {
+      mode: signer.mode,
+      submitMethod: "mesh_submitTx",
+      innerTxHashHex: plaintext.innerTxHashHex,
+      signedInnerTxHex: `0x${signed.wireHex}`,
+      innerSighashHex: plaintext.innerSighashHex,
+      innerWireBytes: plaintext.innerWireBytes,
+      signedTxWireHex: plaintext.signedTxWireHex,
+    };
     if (signer.mode === "low_value") {
       const updated = await recordLowValueSpend(args.walletName, args.amountUnits);
       built.lowValuePolicy = {
@@ -609,14 +564,6 @@ function deriveKey(
     p: params.p,
     maxmem: 64 * 1024 * 1024,
   });
-}
-
-export function encryptionKeyFromRpc(result: { algo?: string; epoch: number | string; encapsulationKey: string }): EncryptionKey {
-  return {
-    algo: result.algo ?? "ml-kem-768",
-    epoch: typeof result.epoch === "string" ? BigInt(result.epoch) : BigInt(result.epoch),
-    encapsulationKey: hexToBytes(result.encapsulationKey, "encapsulationKey"),
-  };
 }
 
 async function createLowValuePolicy(

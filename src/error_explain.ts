@@ -1,5 +1,4 @@
 export type ErrorClassification =
-  | "mempool_envelope_decryption"
   | "broadcast_disabled"
   | "rpc_unavailable"
   | "insufficient_funds"
@@ -47,19 +46,6 @@ interface ErrorRule {
 }
 
 const RULES: ErrorRule[] = [
-  {
-    classification: "mempool_envelope_decryption",
-    pattern: /(mempool.*decrypt|decrypt.*mempool|decryption failed|encrypted envelope|lyth_submitencrypted.*-32047)/i,
-    retryable: true,
-    severity: "warning",
-    plainEnglish: "The RPC node rejected the encrypted envelope before accepting it into the mempool.",
-    likelyCause: "Usually a node-side mempool/encryption-key epoch mismatch or upstream decryption failure, not proof that funds moved.",
-    actions: [
-      "Run chain_status or rpc_health to check node health.",
-      "Retry the exact signed payload from tx_outbox_retry or submit_signed_transaction.",
-      "Do not rebuild the transfer unless you intentionally want a new signed payload and a new low-value allowance reservation.",
-    ],
-  },
   {
     classification: "broadcast_disabled",
     pattern: /(broadcast disabled|LYTH_MCP_ENABLE_SUBMIT|submit.*disabled)/i,

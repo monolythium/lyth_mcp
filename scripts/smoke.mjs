@@ -160,16 +160,16 @@ assert(restrictedCommerce.ok === true && restrictedCommerce.level === "warn", "e
 assert(renderedRisk.ok === false && renderedRisk.level === "blocked", "expected risk renderer to block unsafe commerce");
 assert(renderedRisk.markdown.includes("Decision: blocked"), "expected risk renderer markdown decision");
 
-const mempoolError = errorExplain.explainError({
-  errorMessage: "lyth_submitEncrypted -32047: upstream unavailable: mempool: decryption failed",
-  rpcMethod: "lyth_submitEncrypted",
+const submitError = errorExplain.explainError({
+  errorMessage: "mesh_submitTx -32603: upstream unavailable: node did not answer",
+  rpcMethod: "mesh_submitTx",
   tool: "tx_outbox_retry",
   outboxId: "outbox_test",
 });
 const privacyError = errorExplain.explainError({
   context: { violations: ["Private-denominated pLYTH cannot be used for commerce."] },
 });
-assert(mempoolError.classification === "mempool_envelope_decryption" && mempoolError.retryable === true, "expected mempool decryption error to be retryable");
+assert(submitError.classification === "rpc_unavailable" && submitError.retryable === true, "expected rpc-unavailable submit error to be retryable");
 assert(privacyError.classification === "privacy_policy" && privacyError.retryable === false, "expected privacy policy error to be blocked");
 
 const clusterRegistry = await clusters.loadClusterRegistry("./clusters.example.json");
@@ -422,14 +422,14 @@ for (const failureCase of failureCases) {
 
 const mockRpc = await startMockRpc();
 try {
-  const failedSubmit = await mockRpc.call("lyth_submitEncrypted", ["0xdeadbeef"]);
-  assert(failedSubmit.error?.code === -32047, "expected mocked encrypted submit failure");
+  const failedSubmit = await mockRpc.call("mesh_submitTx", ["0xdeadbeef"]);
+  assert(failedSubmit.error?.code === -32603, "expected mocked submit failure");
   const explained = errorExplain.explainError({
     errorMessage: `${failedSubmit.error.message}`,
     code: failedSubmit.error.code,
-    rpcMethod: "lyth_submitEncrypted",
+    rpcMethod: "mesh_submitTx",
   });
-  assert(explained.classification === "mempool_envelope_decryption", "expected mocked RPC failure to classify as mempool decryption");
+  assert(explained.classification === "rpc_unavailable", "expected mocked RPC failure to classify as rpc-unavailable");
 } finally {
   await mockRpc.close();
 }
@@ -622,7 +622,7 @@ console.log(JSON.stringify({
   bridgeAlerts: bridgeAlerts.length,
   assets: assetRegistry.registry.assets.length,
   blockedCommerce: blockedCommerce.level,
-  explainedError: mempoolError.classification,
+  explainedError: submitError.classification,
   clusters: clusterRegistry.registry.clusters.length,
   euProvers: euProvers.length,
   monarchClusters: monarch.clusters.length,
@@ -659,13 +659,13 @@ async function startMockRpc() {
     });
     req.on("end", () => {
       const request = JSON.parse(body || "{}");
-      const response = request.method === "lyth_submitEncrypted"
+      const response = request.method === "mesh_submitTx" && request.params?.[0] === "0xdeadbeef"
         ? {
             jsonrpc: "2.0",
             id: request.id,
             error: {
-              code: -32047,
-              message: "upstream unavailable: mempool: decryption failed",
+              code: -32603,
+              message: "upstream unavailable: node did not answer",
             },
           }
         : {

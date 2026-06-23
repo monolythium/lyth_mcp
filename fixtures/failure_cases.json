@@ -1,13 +1,13 @@
 [
   {
-    "name": "mempool encrypted envelope failure",
+    "name": "submit upstream unavailable",
     "input": {
-      "errorMessage": "lyth_submitEncrypted -32047: upstream unavailable: mempool: decryption failed",
-      "rpcMethod": "lyth_submitEncrypted",
+      "errorMessage": "mesh_submitTx -32603: upstream unavailable: node did not answer",
+      "rpcMethod": "mesh_submitTx",
       "tool": "wallet_build_transfer"
     },
     "expected": {
-      "classification": "mempool_envelope_decryption",
+      "classification": "rpc_unavailable",
       "retryable": true
     }
   },
