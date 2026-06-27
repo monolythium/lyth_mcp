@@ -1,5 +1,12 @@
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
+import {
+  RpcClient,
+  type ClusterDirectoryEntryResponse,
+  type ClusterDiversityView,
+  type ClusterEntityResponse,
+  type ClusterStatusResponse,
+} from "@monolythium/core-sdk";
 import { canonicalize } from "./runbooks.js";
 
 export type ClusterStatus = "active" | "draft" | "degraded" | "sunsetting" | "retired";
@@ -502,4 +509,397 @@ function serviceScore(entry: { reputation: ReturnType<typeof clusterReputation>;
 
 function same(a: string | undefined, b: string | undefined): boolean {
   return Boolean(a && b && a.toLowerCase() === b.toLowerCase());
+}
+
+// ---------------------------------------------------------------------------
+// Live on-chain discovery (node-registry 0x1005)
+//
+// The functions below back the discovery surface (cluster_search /
+// operator_search / cluster_reputation / cluster_sunset_status /
+// cluster_foundation_flag / operator_open_seats) with the same SDK reads the
+// charter / service-score surface already uses, instead of the bundled
+// clusters.example.json. Clusters are addressed by their numeric on-chain id;
+// reputation, liveness, diversity, membership and entity flags are read live
+// from the chain. There are no draft/manual placeholders and no hardcoded
+// slashingIncidents — fields the chain does not expose are reported as such.
+// ---------------------------------------------------------------------------
+
+const NODE_REGISTRY_SOURCE = "node-registry-0x1005";
+
+function liveClient(endpoint: string): RpcClient {
+  return new RpcClient(endpoint);
+}
+
+function liveSettled<T>(result: PromiseSettledResult<T>): T | { error: string } {
+  return result.status === "fulfilled"
+    ? result.value
+    : { error: (result.reason as { message?: string } | undefined)?.message ?? String(result.reason) };
+}
+
+function isLiveError(value: unknown): value is { error: string } {
+  return typeof value === "object" && value !== null && "error" in value;
+}
+
+interface ClusterReads {
+  status: ClusterStatusResponse | { error: string };
+  diversity: ClusterDiversityView | { error: string };
+  score: bigint | { error: string };
+  entity: ClusterEntityResponse | { error: string };
+}
+
+/**
+ * Normalize the four live cluster reads (status / diversity / ServiceScore /
+ * entity) into a single JSON-safe record, overlaying the directory-derived
+ * fields (aggregate health, region diversity, active flag) when available.
+ * Per-read failures are surfaced under `reads` rather than silently dropped.
+ */
+function shapeLiveCluster(clusterId: number, reads: ClusterReads, directory?: ClusterDirectoryEntryResponse) {
+  const status = isLiveError(reads.status) ? null : reads.status;
+  const diversity = isLiveError(reads.diversity) ? null : reads.diversity;
+  const score = isLiveError(reads.score) ? null : reads.score;
+  const entity = isLiveError(reads.entity) ? null : reads.entity;
+
+  return {
+    clusterId,
+    source: NODE_REGISTRY_SOURCE,
+    size: directory?.size ?? status?.size ?? null,
+    threshold: directory?.threshold ?? status?.threshold ?? null,
+    quorum: status?.quorum ?? null,
+    quorumMet: status ? status.live >= status.threshold : null,
+    active: directory?.active ?? null,
+    aggregateHealth: directory?.aggregateHealth ?? null,
+    regionDiversity: directory?.regionDiversity ?? null,
+    reputationScore: status?.reputationScore ?? null,
+    livenessScore: status?.livenessScore ?? null,
+    serviceScore: score !== null ? score.toString() : null,
+    diversityScore: diversity?.score ?? null,
+    diversity: diversity
+      ? {
+          score: diversity.score,
+          asnVariance: diversity.asnVariance,
+          geoVariance: diversity.geoVariance,
+          hostingSpread: diversity.hostingSpread,
+        }
+      : null,
+    membership: status
+      ? {
+          live: status.live,
+          lagging: status.lagging,
+          offline: status.offline,
+          maintenance: status.maintenance,
+          members: status.members.map((member) => ({ operatorId: member.operatorId, state: member.state })),
+        }
+      : null,
+    entityLabel: entity?.entity ?? null,
+    foundationControlled: entity ? entity.entity !== "independent" : null,
+    epoch: status?.epoch != null ? status.epoch.toString() : null,
+    round: status?.round != null ? status.round.toString() : null,
+    lastUpdateHeight: status ? status.lastUpdateHeight.toString() : null,
+    reads: {
+      status: isLiveError(reads.status) ? { error: reads.status.error } : "ok",
+      diversity: isLiveError(reads.diversity) ? { error: reads.diversity.error } : "ok",
+      serviceScore: isLiveError(reads.score) ? { error: reads.score.error } : "ok",
+      entity: isLiveError(reads.entity) ? { error: reads.entity.error } : "ok",
+    },
+  };
+}
+
+type LiveClusterRecord = ReturnType<typeof shapeLiveCluster>;
+
+function liveClusterRank(cluster: LiveClusterRecord): number {
+  let rank = 0;
+  if (cluster.quorumMet === true) rank += 100_000;
+  if (cluster.active === true) rank += 50_000;
+  rank += (cluster.reputationScore ?? 0) * 100;
+  rank += (cluster.livenessScore ?? 0) * 10;
+  rank += cluster.diversityScore ?? 0;
+  return rank;
+}
+
+async function enrichDirectoryEntry(c: RpcClient, entry: ClusterDirectoryEntryResponse): Promise<LiveClusterRecord> {
+  const [status, diversity, score, entity] = await Promise.allSettled([
+    c.lythClusterStatus(entry.clusterId),
+    c.lythGetClusterDiversity(entry.clusterId),
+    c.lythGetClusterServiceScore(entry.clusterId),
+    c.lythGetClusterEntity(entry.clusterId),
+  ]);
+  return shapeLiveCluster(
+    entry.clusterId,
+    {
+      status: liveSettled(status),
+      diversity: liveSettled(diversity),
+      score: liveSettled(score),
+      entity: liveSettled(entity),
+    },
+    entry,
+  );
+}
+
+/** Read one cluster live, looking up its directory entry for the overlay fields. */
+export async function readLiveCluster(endpoint: string, clusterId: number): Promise<LiveClusterRecord> {
+  const c = liveClient(endpoint);
+  const [directory, status, diversity, score, entity] = await Promise.allSettled([
+    c.lythClusterDirectory(0, 100),
+    c.lythClusterStatus(clusterId),
+    c.lythGetClusterDiversity(clusterId),
+    c.lythGetClusterServiceScore(clusterId),
+    c.lythGetClusterEntity(clusterId),
+  ]);
+  const entry = directory.status === "fulfilled"
+    ? directory.value.clusters.find((candidate) => candidate.clusterId === clusterId)
+    : undefined;
+  return shapeLiveCluster(
+    clusterId,
+    {
+      status: liveSettled(status),
+      diversity: liveSettled(diversity),
+      score: liveSettled(score),
+      entity: liveSettled(entity),
+    },
+    entry,
+  );
+}
+
+/** cluster_search — live directory of clusters with live health/diversity/entity, filtered by on-chain-backed criteria. */
+export async function searchLiveClusters(endpoint: string, args: {
+  query?: string;
+  region?: string;
+  activeOnly?: boolean;
+  foundationControlled?: boolean;
+  limit?: number;
+} = {}) {
+  const c = liveClient(endpoint);
+  const directory = await c.lythClusterDirectory(0, 100);
+  const enriched = await Promise.all(directory.clusters.map((entry) => enrichDirectoryEntry(c, entry)));
+
+  let clusters = enriched;
+  if (args.activeOnly) {
+    clusters = clusters.filter((cluster) => cluster.active === true);
+  }
+  if (args.foundationControlled !== undefined) {
+    clusters = clusters.filter((cluster) => cluster.foundationControlled === args.foundationControlled);
+  }
+  if (args.region) {
+    const region = args.region.toLowerCase();
+    clusters = clusters.filter((cluster) => (cluster.regionDiversity ?? []).some((code) => code.toLowerCase() === region));
+  }
+  if (args.query) {
+    const query = args.query.toLowerCase();
+    clusters = clusters.filter((cluster) => canonicalize(cluster).toLowerCase().includes(query));
+  }
+  clusters = [...clusters].sort((a, b) => liveClusterRank(b) - liveClusterRank(a)).slice(0, args.limit ?? 50);
+
+  return {
+    endpoint,
+    source: NODE_REGISTRY_SOURCE,
+    totalClusters: directory.totalClusters,
+    matched: clusters.length,
+    clusters,
+    notes: [
+      "Live read from the on-chain node-registry (0x1005): cluster directory, status, diversity, ServiceScore and entity flag.",
+      "Commercial fields (price/capacity/hardware/gpuClass) and service-tier markets have no on-chain representation and are not reported here.",
+      "There is no on-chain open-seat primitive; seat availability is not inferred.",
+    ],
+  };
+}
+
+/** operator_search — operators discovered from live cluster rosters, enriched with on-chain identity + network metadata. */
+export async function searchLiveOperators(endpoint: string, args: {
+  query?: string;
+  clusterId?: number;
+  region?: string;
+  limit?: number;
+} = {}) {
+  const c = liveClient(endpoint);
+  let clusterIds: number[];
+  if (args.clusterId !== undefined) {
+    clusterIds = [args.clusterId];
+  } else {
+    const directory = await c.lythClusterDirectory(0, 100);
+    clusterIds = directory.clusters.map((entry) => entry.clusterId);
+  }
+
+  const statuses = await Promise.allSettled(clusterIds.map((id) => c.lythClusterStatus(id)));
+  const memberships = new Map<string, { clusterId: number; state: string }[]>();
+  statuses.forEach((result, index) => {
+    if (result.status === "fulfilled") {
+      for (const member of result.value.members) {
+        const list = memberships.get(member.operatorId) ?? [];
+        list.push({ clusterId: clusterIds[index], state: member.state });
+        memberships.set(member.operatorId, list);
+      }
+    }
+  });
+
+  const operatorIds = [...memberships.keys()];
+  const [infos, metas] = await Promise.all([
+    Promise.allSettled(operatorIds.map((id) => c.lythOperatorInfo(id))),
+    Promise.allSettled(operatorIds.map((id) => c.lythGetOperatorNetworkMetadata(id))),
+  ]);
+
+  let operators = operatorIds.map((id, index) => {
+    const infoResult = infos[index];
+    const metaResult = metas[index];
+    const info = infoResult.status === "fulfilled" ? infoResult.value : null;
+    const meta = metaResult.status === "fulfilled" ? metaResult.value : null;
+    return {
+      operatorId: id,
+      moniker: info?.moniker ?? null,
+      alias: info?.alias ?? null,
+      chainAddress: info?.chainAddress ?? null,
+      bonded: info?.bonded ?? null,
+      bondedAmount: info?.bondedAmount ?? null,
+      lifecycleState: info?.lifecycleState ?? null,
+      activeClusterIds: info?.activeClusterIds ?? null,
+      memberships: memberships.get(id) ?? [],
+      network: meta
+        ? { asn: meta.asn, geoRegion: meta.geoRegion, hostingClass: meta.hostingClass }
+        : null,
+    };
+  });
+
+  if (args.region) {
+    const region = args.region.toLowerCase();
+    operators = operators.filter((operator) => (operator.network?.geoRegion ?? "").toLowerCase() === region);
+  }
+  if (args.query) {
+    const query = args.query.toLowerCase();
+    operators = operators.filter((operator) => canonicalize(operator).toLowerCase().includes(query));
+  }
+  operators = operators.slice(0, args.limit ?? 50);
+
+  return {
+    endpoint,
+    source: NODE_REGISTRY_SOURCE,
+    clusterIdsScanned: clusterIds,
+    operatorCount: operators.length,
+    operators,
+    notes: [
+      "Operators are discovered from live cluster rosters (node-registry 0x1005); identity, bond and network metadata are read per operator.",
+      "Open-seat interest has no on-chain representation and is not reported.",
+    ],
+  };
+}
+
+/** cluster_reputation — live reputation/liveness/ServiceScore/diversity for one cluster. No slashingIncidents placeholder. */
+export async function liveClusterReputation(endpoint: string, clusterId: number) {
+  const cluster = await readLiveCluster(endpoint, clusterId);
+  const labels: string[] = [];
+  const warnings: string[] = [];
+
+  if (cluster.foundationControlled === true) {
+    labels.push("foundation_controlled");
+    warnings.push("Entity/foundation-controlled cluster: good bootstrap reliability, weaker decentralization for delegation routing.");
+  }
+  if (cluster.active === false) {
+    labels.push("inactive");
+    warnings.push("Cluster is not active in the live directory; avoid production routing until it is active.");
+  }
+  if (cluster.quorumMet === false) {
+    labels.push("below_threshold");
+    warnings.push("Cluster is below its consensus threshold (live members < threshold); it cannot produce until quorum recovers.");
+  }
+  if (typeof cluster.diversityScore === "number" && cluster.diversityScore >= 8500) {
+    labels.push("high_decentralization");
+  }
+
+  return {
+    clusterId,
+    source: NODE_REGISTRY_SOURCE,
+    reputationScore: cluster.reputationScore,
+    livenessScore: cluster.livenessScore,
+    serviceScore: cluster.serviceScore,
+    quorumMet: cluster.quorumMet,
+    threshold: cluster.threshold,
+    size: cluster.size,
+    membership: cluster.membership,
+    diversity: cluster.diversity,
+    foundationControlled: cluster.foundationControlled,
+    entityLabel: cluster.entityLabel,
+    labels,
+    warnings,
+    notes: [
+      "Reputation, liveness and ServiceScore are read live from the node-registry (0x1005); no draft/manual placeholders.",
+      "Slashing history is not exposed by these reads (it requires chain-event indexing) and is not reported as zero here.",
+    ],
+  };
+}
+
+/** cluster_sunset_status — live operational status. The chain has no sunset/retired primitive; status is derived from live reads. */
+export async function liveClusterSunsetStatus(endpoint: string, clusterId: number) {
+  const cluster = await readLiveCluster(endpoint, clusterId);
+  const warning = cluster.quorumMet === false
+    ? "Cluster is below its consensus threshold; avoid new delegation or service routing until quorum recovers."
+    : cluster.active === false
+      ? "Cluster is not active in the live directory; avoid new delegation or routing."
+      : undefined;
+  return {
+    clusterId,
+    source: NODE_REGISTRY_SOURCE,
+    active: cluster.active,
+    quorumMet: cluster.quorumMet,
+    aggregateHealth: cluster.aggregateHealth,
+    threshold: cluster.threshold,
+    size: cluster.size,
+    membership: cluster.membership,
+    warning,
+    notes: [
+      "The chain has no on-chain 'sunset'/'retired' primitive; operational status is derived live from the cluster directory, threshold and membership.",
+    ],
+  };
+}
+
+/** cluster_foundation_flag — live entity flag from the node-registry (independent vs entity/foundation). */
+export async function liveClusterFoundationFlag(endpoint: string, clusterId: number) {
+  const c = liveClient(endpoint);
+  const entity = await c.lythGetClusterEntity(clusterId);
+  const foundationControlled = entity.entity !== "independent";
+  return {
+    clusterId,
+    source: NODE_REGISTRY_SOURCE,
+    entity: { label: entity.entity, code: entity.entityCode },
+    foundationControlled,
+    explanation: foundationControlled
+      ? `Cluster is registered on-chain to entity '${entity.entity}' (not independent). Useful for bootstrap reliability, but weaker for maximum decentralization.`
+      : "Cluster is registered on-chain as an independent entity.",
+    stakingGuidance: foundationControlled
+      ? "Prefer independent clusters for max-decentralization delegation unless reliability is the priority."
+      : "Potential candidate for decentralization-oriented delegation, subject to live reputation, liveness and cap checks.",
+  };
+}
+
+/**
+ * operator_open_seats — HONEST status. There is no on-chain open-seat primitive
+ * yet, so this returns a "marketplace launching" status with 0 open seats and
+ * lists the live clusters for context only. Seats are never fabricated.
+ */
+export async function liveOperatorOpenSeats(endpoint: string, args: { limit?: number } = {}) {
+  const c = liveClient(endpoint);
+  const directory = await c.lythClusterDirectory(0, 100);
+  const entries = directory.clusters.slice(0, args.limit ?? 50);
+  const statuses = await Promise.allSettled(entries.map((entry) => c.lythClusterStatus(entry.clusterId)));
+  const clusters = entries.map((entry, index) => {
+    const result = statuses[index];
+    const status = result.status === "fulfilled" ? result.value : null;
+    return {
+      clusterId: entry.clusterId,
+      size: entry.size,
+      threshold: entry.threshold,
+      active: entry.active,
+      membersFilled: status ? status.members.length : null,
+      openSeats: 0,
+    };
+  });
+  return {
+    endpoint,
+    source: NODE_REGISTRY_SOURCE,
+    status: "marketplace launching; no live on-chain seats yet",
+    openSeatPrimitive: "not_live",
+    totalOpenSeats: 0,
+    clusters,
+    notes: [
+      "There is no on-chain open-seat / vacancy primitive yet. Cluster admission is mutual-consent formation (10-of-10) or the CJ-1 operator-request + 7-of-10 cluster vote, both coordinated off-chain.",
+      "Live clusters are listed for context only; 'openSeats' is reported as 0 and is never fabricated from planning metadata.",
+    ],
+  };
 }
