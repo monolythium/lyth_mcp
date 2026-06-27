@@ -322,8 +322,8 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | Tool | Purpose |
 |---|---|
 | `wallet_funding_address` | Create or return a local testnet agent wallet funding address |
-| `wallet_setup` | Create a local encrypted PQM-1/ML-DSA-65 agent wallet |
-| `wallet_import` | Import an existing PQM-1 mnemonic into the encrypted store |
+| `wallet_setup` | Create a local encrypted ML-DSA-65 agent wallet |
+| `wallet_import` | Import an existing 24-word recovery phrase into the encrypted store |
 | `wallet_list` | List local wallets and low-value policy status |
 | `wallet_low_value_accounting` | Show reserved/submitted/confirmed/failed/expired low-value buckets |
 | `wallet_preflight_transfer` | Check chain id, balance, nonce, RPC health, encryption key, and policy before signing |

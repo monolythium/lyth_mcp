@@ -275,7 +275,7 @@ const walletFixture = {
   name: "pizza-agent",
   address: "0x71550000000000000000000000000000000029bd",
   publicKey: "0xabc",
-  algorithm: "PQM1-MLDSA65",
+  algorithm: "MLDSA65",
   keyProtection: "local_machine_key",
   createdAt: new Date().toISOString(),
   lowValue: {

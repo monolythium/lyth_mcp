@@ -6,7 +6,7 @@
  * - reads live Monolythium RPC/API data;
  * - drafts and validates AI runbooks;
  * - prepares wallet approval payloads;
- * - stores local MCP wallets only as encrypted PQM-1 mnemonics;
+ * - stores local MCP wallets only as encrypted recovery phrases;
  * - never broadcasts unless LYTH_MCP_ENABLE_SUBMIT=1 is explicitly set.
  *
  * On-chain tx submission goes through the SDK plaintext path
@@ -2218,7 +2218,7 @@ server.tool(
   {
     name: z.string().min(1).describe("Local wallet name, e.g. agent-main."),
     passphrase: z.string().min(12).optional().describe("Encryption passphrase. If omitted, a local machine key is used and low-value mode defaults on."),
-    revealMnemonic: z.boolean().optional().describe("Return the generated 24-word PQM-1 mnemonic once. Default false."),
+    revealMnemonic: z.boolean().optional().describe("Return the generated 24-word recovery phrase once. Default false."),
     overwrite: z.boolean().optional().describe("Replace an existing wallet with the same name."),
     lowValueNoPassphrase: z.boolean().optional().describe("Enable local hot mode for capped low-value spends. Defaults true when passphrase is omitted."),
     lowValueMaxAmount: z.string().optional().describe(`Max LYTH per transaction for no-passphrase signing. Default ${DEFAULT_LOW_VALUE_MAX} in local-key mode.`),
@@ -2254,10 +2254,10 @@ server.tool(
 
 server.tool(
   "wallet_import",
-  "Import an existing PQM-1 mnemonic into the local encrypted wallet store.",
+  "Import an existing 24-word recovery phrase into the local encrypted wallet store.",
   {
     name: z.string().min(1),
-    mnemonic: z.string().describe("24-word PQM-1 mnemonic."),
+    mnemonic: z.string().describe("24-word BIP-39 recovery phrase."),
     passphrase: z.string().min(12).optional(),
     overwrite: z.boolean().optional(),
     lowValueNoPassphrase: z.boolean().optional(),
