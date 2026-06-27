@@ -19,7 +19,7 @@ Pages:
 
 ## EVM Hot Wallet And Funding
 
-The EVM hot wallet is a **separate, low-value operating wallet** — never custody. It's a fresh secp256k1 key, encrypted at rest with AES-256-GCM (passphrase or local-machine key, same model as PQM-1 agent wallets), with per-`(chain, asset)` caps.
+The EVM hot wallet is a **separate, low-value operating wallet** — never custody. It's a fresh secp256k1 key, encrypted at rest with AES-256-GCM (passphrase or local-machine key, same model as ML-DSA-65 agent wallets), with per-`(chain, asset)` caps.
 
 Default supported chains: Ethereum mainnet (`1`) and Base (`8453`). Polygon, Arbitrum, and Optimism are configurable.
 

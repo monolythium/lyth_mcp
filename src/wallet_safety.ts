@@ -280,7 +280,7 @@ function accountSafetyProfile(
       ],
     },
     missingProductionSignals: [
-      "PQM-1 mnemonic backup status is local/user-held and not provable to MCP.",
+      "Recovery phrase backup status is local/user-held and not provable to MCP.",
       "SLH-DSA emergency-key status is TODO(core).",
       "Passkey/hardware-wallet status is TODO(wallet).",
       "On-chain spending policy status is TODO(core/wallet).",

@@ -1,10 +1,10 @@
 import {
   buildPlaintextSubmission,
   bytesToHex,
-  generatePqm1Mnemonic,
+  generateMnemonic,
   MlDsa65Backend,
-  pqm1MnemonicToAddress,
-  pqm1MnemonicToMlDsa65Backend,
+  mnemonicToAddress,
+  mnemonicToMlDsa65Backend,
   type NativeEvmTxFields,
   type PlaintextSubmission,
 } from "@monolythium/core-sdk/crypto";
@@ -28,7 +28,7 @@ export interface WalletRecord {
   name: string;
   address: string;
   publicKey: string;
-  algorithm: "PQM1-MLDSA65";
+  algorithm: "MLDSA65";
   keyProtection?: "passphrase" | "local_machine_key";
   createdAt: string;
   encryptedMnemonic: EncryptedPayload;
@@ -238,13 +238,13 @@ export async function createWallet(args: {
     throw new Error(`wallet '${args.name}' already exists`);
   }
 
-  const mnemonic = generatePqm1Mnemonic();
-  const backend = pqm1MnemonicToMlDsa65Backend(mnemonic);
+  const mnemonic = generateMnemonic();
+  const backend = mnemonicToMlDsa65Backend(mnemonic);
   const record: WalletRecord = {
     name: args.name,
     address: backend.getAddress(),
     publicKey: bytesToHex(backend.publicKey()),
-    algorithm: "PQM1-MLDSA65",
+    algorithm: "MLDSA65",
     keyProtection: key.protection,
     createdAt: new Date().toISOString(),
     encryptedMnemonic: encryptSecret(mnemonic, key.secret),
@@ -285,8 +285,8 @@ export async function importWallet(args: {
   agent?: Omit<AgentWalletMetadata, "updatedAt">;
 }): Promise<WalletSummary & { storePath: string }> {
   const key = await resolveNewWalletKey(args.passphrase, args.allowLocalKey === true);
-  const address = pqm1MnemonicToAddress(args.mnemonic);
-  const backend = pqm1MnemonicToMlDsa65Backend(args.mnemonic);
+  const address = mnemonicToAddress(args.mnemonic);
+  const backend = mnemonicToMlDsa65Backend(args.mnemonic);
   const store = await readWalletStore();
   const existing = store.wallets.find((w) => w.name === args.name);
   if (existing && !args.overwrite) {
@@ -296,7 +296,7 @@ export async function importWallet(args: {
     name: args.name,
     address,
     publicKey: bytesToHex(backend.publicKey()),
-    algorithm: "PQM1-MLDSA65",
+    algorithm: "MLDSA65",
     keyProtection: key.protection,
     createdAt: new Date().toISOString(),
     encryptedMnemonic: encryptSecret(args.mnemonic, key.secret),
@@ -400,7 +400,7 @@ export async function removeWalletStoreForTestsOnly(path: string): Promise<void>
 
 export async function unlockBackend(name: string, passphrase?: string): Promise<MlDsa65Backend> {
   const mnemonic = await exportMnemonic(name, passphrase);
-  return pqm1MnemonicToMlDsa65Backend(mnemonic);
+  return mnemonicToMlDsa65Backend(mnemonic);
 }
 
 export async function buildTransfer(args: {
@@ -623,7 +623,7 @@ async function resolveSigningBackend(args: {
   const mnemonic = decryptSecret(policy.encryptedMnemonic, await readOrCreateKey(hotKeyPath()));
   return {
     mode: "low_value",
-    backend: pqm1MnemonicToMlDsa65Backend(mnemonic),
+    backend: mnemonicToMlDsa65Backend(mnemonic),
   };
 }
 
