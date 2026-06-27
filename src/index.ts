@@ -134,12 +134,17 @@ import {
   getOperator,
   listClusters,
   listOperators,
+  liveClusterFoundationFlag,
+  liveClusterReputation,
+  liveClusterSunsetStatus,
+  liveOperatorOpenSeats,
   loadClusterRegistry,
   monarchOperatorAssistant,
   operatorStatus,
+  searchLiveClusters,
+  searchLiveOperators,
   searchServices,
   type ClusterServiceType,
-  type ClusterStatus,
 } from "./clusters.js";
 import {
   buildUpdateCharterDraft,
@@ -1744,7 +1749,6 @@ const bookingStatusEnum = z.enum(["requested", "provider_requested", "accepted_d
 const invoiceStatusEnum = z.enum(["open", "paid", "cancelled", "expired"]);
 const bridgeStatusEnum = z.enum(["active", "draft", "degraded", "paused"]);
 const bridgeRouteTypeEnum = z.enum(["chainlink_ccip"]);
-const clusterStatusEnum = z.enum(["active", "draft", "degraded", "sunsetting", "retired"]);
 const clusterServiceTypeEnum = z.enum(["rpc", "archive", "prover", "oracle", "indexer", "validator"]);
 const delegationPhaseEnum = z.enum(["bootstrap", "growth", "mature"]);
 const delegationModeEnum = z.enum(["max_yield", "max_diversity", "max_decentralization", "custom"]);
@@ -5976,41 +5980,21 @@ server.tool("cluster_registry_info", "Show local cluster/operator registry metad
 
 server.tool(
   "cluster_search",
-  "Search local cluster metadata by region, service, status, foundation control, GPU availability, and open seats.",
+  "Search the live on-chain cluster directory (node-registry 0x1005) with live health, liveness, diversity, ServiceScore, and entity flag. Filters: text query, on-chain region code, active-only, and entity/foundation control.",
   {
     query: z.string().optional(),
-    region: z.string().optional(),
-    jurisdiction: z.string().optional(),
-    status: clusterStatusEnum.optional(),
-    serviceType: clusterServiceTypeEnum.optional(),
-    foundationControlled: z.boolean().optional(),
-    gpuRequired: z.boolean().optional(),
-    minOpenSeats: z.number().int().min(0).optional(),
+    region: z.string().optional().describe("ISO-3166-1 alpha-3 region code to match against the cluster's on-chain region diversity."),
+    activeOnly: z.boolean().optional().describe("Only clusters marked active in the live directory."),
+    foundationControlled: z.boolean().optional().describe("Filter by the on-chain entity flag (independent vs entity/foundation)."),
     limit: z.number().min(1).max(100).optional(),
   },
-  async ({ query, region, jurisdiction, status, serviceType, foundationControlled, gpuRequired, minOpenSeats, limit }) => {
-    const registry = await loadClusters();
-    const clusters = listClusters(registry.registry, {
-      query,
-      region,
-      jurisdiction,
-      status: status as ClusterStatus | undefined,
-      serviceType: serviceType as ClusterServiceType | undefined,
-      foundationControlled,
-      gpuRequired,
-      minOpenSeats,
-      limit,
-    });
-    return text({
-      registry: clusterRegistrySummary(registry),
-      clusters: clusters.map((cluster) => ({
-        ...cluster,
-        reputationSummary: clusterReputation(cluster),
-        foundation: clusterFoundationFlag(cluster),
-        sunset: clusterSunsetStatus(cluster),
-      })),
-      warning: "Local planning metadata only. TODO(mainnet): replace with signed cluster registry and live indexer data.",
-    });
+  async ({ query, region, activeOnly, foundationControlled, limit }) => {
+    const endpoint = await firstReachableEndpoint();
+    try {
+      return text(await searchLiveClusters(endpoint, { query, region, activeOnly, foundationControlled, limit }));
+    } catch (error) {
+      return errorJson({ ok: false, endpoint, error: error instanceof Error ? error.message : String(error) });
+    }
   },
 );
 
@@ -6036,59 +6020,68 @@ server.tool(
 
 server.tool(
   "cluster_reputation",
-  "Explain one cluster's reputation, uptime, slashing history, service tiers, and decentralization risk.",
+  "Explain one cluster's live reputation, liveness, ServiceScore, diversity, and decentralization risk read from the node-registry (0x1005). No slashing placeholder — slashing history is not exposed by these reads and is flagged as such.",
   {
-    clusterId: z.string().min(1),
+    clusterId: z.number().int().min(0).describe("On-chain cluster id (e.g. 0, 1)."),
   },
   async ({ clusterId }) => {
-    const registry = await loadClusters();
-    return text(clusterReputation(getCluster(registry.registry, clusterId)));
+    const endpoint = await firstReachableEndpoint();
+    try {
+      return text(await liveClusterReputation(endpoint, clusterId));
+    } catch (error) {
+      return errorJson({ ok: false, endpoint, clusterId, error: error instanceof Error ? error.message : String(error) });
+    }
   },
 );
 
 server.tool(
   "cluster_foundation_flag",
-  "Explain whether a cluster is foundation-controlled and what that means for delegation/decentralization.",
+  "Explain whether a cluster is entity/foundation-controlled from the live on-chain entity flag (node-registry 0x1005), and what that means for delegation/decentralization.",
   {
-    clusterId: z.string().min(1),
+    clusterId: z.number().int().min(0).describe("On-chain cluster id."),
   },
   async ({ clusterId }) => {
-    const registry = await loadClusters();
-    return text(clusterFoundationFlag(getCluster(registry.registry, clusterId)));
+    const endpoint = await firstReachableEndpoint();
+    try {
+      return text(await liveClusterFoundationFlag(endpoint, clusterId));
+    } catch (error) {
+      return errorJson({ ok: false, endpoint, clusterId, error: error instanceof Error ? error.message : String(error) });
+    }
   },
 );
 
 server.tool(
   "cluster_sunset_status",
-  "Explain whether a cluster is active, sunsetting, retired, or unsafe for new delegation/routing.",
+  "Explain whether a cluster is operationally healthy or unsafe for new delegation/routing, derived live from the cluster directory, threshold, and membership (the chain has no 'sunset'/'retired' primitive).",
   {
-    clusterId: z.string().min(1),
+    clusterId: z.number().int().min(0).describe("On-chain cluster id."),
   },
   async ({ clusterId }) => {
-    const registry = await loadClusters();
-    return text(clusterSunsetStatus(getCluster(registry.registry, clusterId)));
+    const endpoint = await firstReachableEndpoint();
+    try {
+      return text(await liveClusterSunsetStatus(endpoint, clusterId));
+    } catch (error) {
+      return errorJson({ ok: false, endpoint, clusterId, error: error instanceof Error ? error.message : String(error) });
+    }
   },
 );
 
 server.tool(
   "operator_search",
-  "Search local operator metadata by region, cluster, foundation control, and open-seat interest.",
+  "Search operators discovered from live cluster rosters (node-registry 0x1005), enriched with on-chain identity, bond, cluster membership, and ASN/geo/hosting network metadata. Filter by cluster id, on-chain region, or text query.",
   {
     query: z.string().optional(),
-    region: z.string().optional(),
-    clusterId: z.string().optional(),
-    foundationControlled: z.boolean().optional(),
-    openSeatInterest: z.boolean().optional(),
+    region: z.string().optional().describe("ISO-3166-1 alpha-3 region code to match against the operator's on-chain network metadata."),
+    clusterId: z.number().int().min(0).optional().describe("Limit to one on-chain cluster id; omit to scan all live clusters."),
     limit: z.number().min(1).max(100).optional(),
   },
-  async ({ query, region, clusterId, foundationControlled, openSeatInterest, limit }) => {
-    const registry = await loadClusters();
-    return text({
-      registry: clusterRegistrySummary(registry),
-      operators: listOperators(registry.registry, { query, region, clusterId, foundationControlled, openSeatInterest, limit })
-        .map((operator) => operatorStatus(registry.registry, operator)),
-      warning: "Local planning metadata only. TODO(mainnet): replace with signed operator registry and TPM attestation data.",
-    });
+  async ({ query, region, clusterId, limit }) => {
+    const endpoint = await firstReachableEndpoint();
+    try {
+      return text(await searchLiveOperators(endpoint, { query, region, clusterId, limit }));
+    } catch (error) {
+      return errorJson({ ok: false, endpoint, error: error instanceof Error ? error.message : String(error) });
+    }
   },
 );
 
@@ -6110,32 +6103,17 @@ server.tool(
 
 server.tool(
   "operator_open_seats",
-  "List clusters/operators with open operator seats for onboarding or decentralization planning.",
+  "Report on-chain open-seat availability for operator onboarding. The open-seat primitive is not live yet, so this honestly returns a 'marketplace launching; no live on-chain seats yet' status with 0 open seats and lists the live clusters for context — it never fabricates seats.",
   {
-    operatorId: z.string().optional(),
-    region: z.string().optional(),
-    serviceType: clusterServiceTypeEnum.optional(),
     limit: z.number().min(1).max(100).optional(),
   },
-  async ({ operatorId, region, serviceType, limit }) => {
-    const registry = await loadClusters();
-    const operator = operatorId ? getOperator(registry.registry, operatorId) : null;
-    const clusters = listClusters(registry.registry, {
-      region,
-      serviceType: serviceType as ClusterServiceType | undefined,
-      minOpenSeats: 1,
-      limit,
-    }).filter((cluster) => !operator || operator.clusterIds?.includes(cluster.id) || operator.openSeatInterest);
-    return text({
-      registry: clusterRegistrySummary(registry),
-      operator: operator ? operatorStatus(registry.registry, operator) : undefined,
-      clusters: clusters.map((cluster) => ({
-        cluster,
-        openSeats: cluster.operatorSeats?.open ?? 0,
-        reputation: clusterReputation(cluster),
-      })),
-      warning: "Open seats are local metadata. TODO(mainnet): use live operator registry and application flow.",
-    });
+  async ({ limit }) => {
+    const endpoint = await firstReachableEndpoint();
+    try {
+      return text(await liveOperatorOpenSeats(endpoint, { limit }));
+    } catch (error) {
+      return errorJson({ ok: false, endpoint, error: error instanceof Error ? error.message : String(error) });
+    }
   },
 );
 
