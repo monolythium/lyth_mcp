@@ -62,7 +62,6 @@ These are intentionally TODO/mainnet:
 
 - G3 emergency declarations;
 - PQ checkpoints;
-- Ferveo threshold status;
 - live bridge settlement state;
 - live TPM quote verification;
 - wallet-native passkey/hardware threshold state;

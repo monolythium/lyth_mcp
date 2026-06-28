@@ -189,7 +189,7 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `bridge_blast_radius` | Summarize affected bridge routes, local bridge/swap receipts, signed bridge payloads, and freeze recommendations |
 | `recovery_status` | Show recovery posture and available recovery runbooks for local agent wallets |
 | `recovery_runbook_draft` | Draft pause, drain, delete, stale-outbox release, or future emergency-key recovery steps |
-| `audit_gate_dashboard` | Track local audit/research gates for zkML, RISC-V VM, MRC, FRI/STARK, Ferveo, oracle, and DAG sync |
+| `audit_gate_dashboard` | Track local audit/research gates for zkML, RISC-V VM, MRC, FRI/STARK, oracle, and DAG sync |
 | `readiness_check` | Show mainnet-readiness gates for no-EVM, MRC, commerce, bridge, wallet, runbooks, security, docs, and tests |
 | `account_overview` | Get balance, nonce, label, profile, and flow for an address |
 | `recent_transactions` | Read recent transactions from `lyth_txFeed` |

@@ -127,7 +127,7 @@ export function buildReadinessGates(ctx: ReadinessContext) {
         "Local threat posture, emergency watcher, bridge blast-radius monitor, recovery runbook drafts, RPC health, outbox, receipts, and privacy guardrails.",
       ],
       missing: [
-        "Core-backed G3/PQ emergency declarations, checkpoint verification, Ferveo threshold status, verifier gates, bridge settlement state, and audit/research gates from signed metadata.",
+        "Core-backed G3/PQ emergency declarations, checkpoint verification, verifier gates, bridge settlement state, and audit/research gates from signed metadata.",
       ],
     }),
     gate({

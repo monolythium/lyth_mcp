@@ -44,7 +44,6 @@ export interface SecurityContext {
 export function securityStatus(ctx: SecurityContext) {
   const components = [
     mempoolPosture(ctx.rpcHealth),
-    ferveoPosture(),
     ccipBridgePosture(ctx.bridgeRegistry),
     oraclePosture(ctx.clusterRegistry),
     riscVmGatePosture(),
@@ -69,7 +68,7 @@ export function securityStatus(ctx: SecurityContext) {
     bridgeAlerts: bridgeCircuitBreakerAlerts(ctx.bridgeRegistry),
     assumptions: [
       "This is an MCP-local dashboard over current RPC health and bundled/example registries.",
-      "TODO(mainnet): replace Ferveo, PQ checkpoint, emergency, verifier, and VM gate statuses with signed core/indexer data.",
+      "TODO(mainnet): replace PQ checkpoint, emergency, verifier, and VM gate statuses with signed core/indexer data.",
     ],
   };
 }
@@ -271,7 +270,6 @@ export function auditResearchGateDashboard(ctx: SecurityContext) {
     gate("mrc_standards", "TODO(core/indexer)", "MRC assets are represented by local registry labels only.", "critical_for_tokens_nfts"),
     gate("evm_retirement", "MCP_READY", "MCP gives explicit no-EVM guidance; core removal/readiness must be checked in mono-core.", "strategy"),
     gate("chainlink_ccip", ccipLinkRoutes.some((route) => route.status === "active") ? "WATCH" : "TODO(mainnet)", `${ccipLinkRoutes.length} Chainlink CCIP + LINK route(s) in local registry.`, "critical_for_bridges"),
-    gate("ferveo", "TODO(core/indexer)", "Ferveo threshold/decryption status is not exposed to MCP yet.", "critical_for_mempool"),
     gate("oracle", hasOracleService(ctx.clusterRegistry) ? "LOCAL_METADATA" : "TODO(core/indexer)", "Oracle service posture is local cluster metadata only.", "critical_for_markets"),
     gate("dag_sync", "TODO(core/indexer)", "DAG sync/finality health needs signed chain telemetry.", "critical_for_consensus"),
   ];
@@ -300,10 +298,6 @@ function mempoolPosture(rpcHealth?: RpcHealthSnapshot) {
     return component("mempool_rpc", "watch", `${quarantined} endpoint(s) quarantined or low-score.`, ["Use rpc_health before writes."]);
   }
   return component("mempool_rpc", "ok", "Readable and write-ready RPC endpoint selected.", []);
-}
-
-function ferveoPosture() {
-  return component("ferveo_threshold", "watch", "Ferveo threshold/decryption status is not queryable from MCP yet.", ["TODO(mainnet): read signed threshold status from core/indexer."]);
 }
 
 function ccipBridgePosture(registry: BridgeRegistry) {

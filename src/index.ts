@@ -1995,7 +1995,7 @@ server.tool("mcp_self_check", "Check MCP install, config, stores, and RPC reacha
 
 server.tool(
   "security_status",
-  "Render the MCP-local security dashboard: RPC/mempool posture, Ferveo TODO, Chainlink CCIP bridge posture, oracle metadata, RISC-V VM gate, wallet hot mode, and outbox pressure.",
+  "Render the MCP-local security dashboard: RPC/mempool posture, Chainlink CCIP bridge posture, oracle metadata, RISC-V VM gate, wallet hot mode, and outbox pressure.",
   {
     includeRpc: z.boolean().optional().describe("Probe live RPC health. Default true."),
   },
@@ -2050,7 +2050,7 @@ server.tool(
 
 server.tool(
   "audit_gate_dashboard",
-  "Show local audit/research gate status for zkML verifier, Rust/RISC-V VM, MRC standards, EVM retirement, Chainlink CCIP, Ferveo, oracle, and DAG sync.",
+  "Show local audit/research gate status for zkML verifier, Rust/RISC-V VM, MRC standards, EVM retirement, Chainlink CCIP, oracle, and DAG sync.",
   {},
   async () => text(auditResearchGateDashboard(await buildSecurityContext({ includeRpc: false }))),
 );
