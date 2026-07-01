@@ -130,13 +130,13 @@ import {
   clusterRegistrySummary,
   clusterReputation,
   clusterSunsetStatus,
-  getCluster,
-  getOperator,
   listClusters,
   listOperators,
   liveClusterFoundationFlag,
+  liveClusterGet,
   liveClusterReputation,
   liveClusterSunsetStatus,
+  liveOperatorGet,
   liveOperatorOpenSeats,
   loadClusterRegistry,
   monarchOperatorAssistant,
@@ -301,8 +301,8 @@ import {
 const DEFAULT_CHAIN_ID = 69420;
 const DEFAULT_NETWORK = "testnet-69420";
 // Live service-reward chain (genesis
-// 0xaabb0f1ea0e9cae9dcc4fbd3e2af577c3568b209061207f919d159c2ab4ba995,
-// re-genesised 2026-06-28, protocore v0.2.4-testnet / mono-core ca7e1f2e).
+// 0xbf512609bf4cf1f3a3f24b70bd62c4e9e7ed3e0ba495ba004b7245313c1c9e65,
+// re-genesised 2026-07-01, protocore v0.3.1-testnet / mono-core eb403ed9).
 // Override with LYTH_RPC_URLS for a different fleet.
 const DEFAULT_RPCS = [
   "http://178.105.12.9:8545",
@@ -6000,21 +6000,17 @@ server.tool(
 
 server.tool(
   "cluster_get",
-  "Get one cluster with reputation, foundation-control flag, sunset status, service tiers, and operator roster.",
+  "Get one cluster read live from the node-registry (0x1005), keyed on the on-chain numeric cluster id returned by cluster_search: live reputation, foundation-control flag, operational status, and operator roster.",
   {
-    clusterId: z.string().min(1),
+    clusterId: z.number().int().min(0).describe("On-chain cluster id (e.g. 0, 1) as returned by cluster_search."),
   },
   async ({ clusterId }) => {
-    const registry = await loadClusters();
-    const cluster = getCluster(registry.registry, clusterId);
-    return text({
-      registry: clusterRegistrySummary(registry),
-      cluster,
-      reputation: clusterReputation(cluster),
-      foundation: clusterFoundationFlag(cluster),
-      sunset: clusterSunsetStatus(cluster),
-      operators: listOperators(registry.registry, { clusterId, limit: 50 }),
-    });
+    const endpoint = await firstReachableEndpoint();
+    try {
+      return text(await liveClusterGet(endpoint, clusterId));
+    } catch (error) {
+      return errorJson({ ok: false, endpoint, clusterId, error: error instanceof Error ? error.message : String(error) });
+    }
   },
 );
 
@@ -6087,23 +6083,23 @@ server.tool(
 
 server.tool(
   "operator_get",
-  "Get one operator's local cluster membership, reputation, open seats, and attestation status.",
+  "Get one operator read live from the node-registry (0x1005): on-chain identity/bond, ASN/geo/hosting network metadata, and live cluster memberships. Keyed on the operator id returned by operator_search.",
   {
-    operatorId: z.string().min(1),
+    operatorId: z.string().min(1).describe("On-chain operator id (op-hash, 0x…32 bytes) as returned by operator_search."),
   },
   async ({ operatorId }) => {
-    const registry = await loadClusters();
-    const operator = getOperator(registry.registry, operatorId);
-    return text({
-      registry: clusterRegistrySummary(registry),
-      ...operatorStatus(registry.registry, operator),
-    });
+    const endpoint = await firstReachableEndpoint();
+    try {
+      return text(await liveOperatorGet(endpoint, operatorId));
+    } catch (error) {
+      return errorJson({ ok: false, endpoint, operatorId, error: error instanceof Error ? error.message : String(error) });
+    }
   },
 );
 
 server.tool(
   "operator_open_seats",
-  "Report on-chain open-seat availability for operator onboarding. The open-seat primitive is not live yet, so this honestly returns a 'marketplace launching; no live on-chain seats yet' status with 0 open seats and lists the live clusters for context — it never fabricates seats.",
+  "Report live on-chain open seats for operator onboarding, read from the L6 seat events on node-registry 0x1005 (advertiseSeat/applyForSeat/voteSeatAdmit/withdrawSeatApplication/closeSeat). Returns real vacancies (cluster id, seat id, kind, status, application count); an empty list means no seat is currently advertised. Fail-closed on RPC error — never fabricates seats.",
   {
     limit: z.number().min(1).max(100).optional(),
   },

@@ -2,10 +2,19 @@ import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import {
   RpcClient,
+  openSeatFromAdvertised,
+  seatStatusFromByte,
+  SEAT_STATUS_CODES,
   type ClusterDirectoryEntryResponse,
   type ClusterDiversityView,
   type ClusterEntityResponse,
   type ClusterStatusResponse,
+  type NativeDecodedEvent,
+  type OpenSeatView,
+  type SeatAdvertisedEvent,
+  type SeatAppliedEvent,
+  type SeatClosedEvent,
+  type SeatFilledEvent,
 } from "@monolythium/core-sdk";
 import { canonicalize } from "./runbooks.js";
 
@@ -698,7 +707,7 @@ export async function searchLiveClusters(endpoint: string, args: {
     notes: [
       "Live read from the on-chain node-registry (0x1005): cluster directory, status, diversity, ServiceScore and entity flag.",
       "Commercial fields (price/capacity/hardware/gpuClass) and service-tier markets have no on-chain representation and are not reported here.",
-      "There is no on-chain open-seat primitive; seat availability is not inferred.",
+      "Live open-seat vacancies are read separately by operator_open_seats (seat events on node-registry 0x1005); seat availability is not inferred from directory metadata here.",
     ],
   };
 }
@@ -776,7 +785,7 @@ export async function searchLiveOperators(endpoint: string, args: {
     operators,
     notes: [
       "Operators are discovered from live cluster rosters (node-registry 0x1005); identity, bond and network metadata are read per operator.",
-      "Open-seat interest has no on-chain representation and is not reported.",
+      "Live open seats an operator can apply to are read separately by operator_open_seats.",
     ],
   };
 }
@@ -868,38 +877,338 @@ export async function liveClusterFoundationFlag(endpoint: string, clusterId: num
   };
 }
 
+// --- Live open-seat discovery (node-registry 0x1005, L6 seat primitive) --------
+//
+// The open-seat marketplace (advertiseSeat / applyForSeat / voteSeatAdmit /
+// withdrawSeatApplication / closeSeat) is live on chain-69420. It ships NO
+// on-chain `getOpenSeat` view selector — discovery is event/indexer backed: a
+// cluster advertises a vacancy (`SeatAdvertised`), applicants escrow their
+// self-bond (`SeatApplied`), admission fills it (`SeatFilled`), and an
+// advertiser can rescind (`SeatClosed`). This mirrors the fold monarch-desktop
+// uses for its seat reads: the events are folded per `(clusterId, seatId)` into
+// the SDK `OpenSeatView` shape. The live read is fail-closed — on RPC/indexer
+// error it degrades to an empty seat list with an error note, never fabricating
+// a listing.
+
+/** Height at which the open-seat primitive activated on chain-69420. */
+export const SEAT_PRIMITIVE_ACTIVATION_HEIGHT = 4000;
+
+/** Block window the discovery scan looks back over from the chain head. */
+export const SEAT_DISCOVERY_WINDOW_BLOCKS = 200_000;
+
+/** Native-event names the discovery scan reads, mirroring the L6 seat events. */
+const SEAT_EVENT_NAMES = {
+  advertised: "SeatAdvertised",
+  applied: "SeatApplied",
+  filled: "SeatFilled",
+  closed: "SeatClosed",
+} as const;
+
+interface SeatEventBatch {
+  advertised: SeatAdvertisedEvent[];
+  applied: SeatAppliedEvent[];
+  filled: SeatFilledEvent[];
+  closed: SeatClosedEvent[];
+}
+
+function seatKey(clusterId: number, seatId: number): string {
+  return `${clusterId}:${seatId}`;
+}
+
+function firstDefined(record: NativeDecodedEvent, keys: readonly string[]): unknown {
+  for (const key of keys) {
+    const value = (record as Record<string, unknown>)[key];
+    if (value !== undefined && value !== null) return value;
+  }
+  return undefined;
+}
+
+function asNum(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "bigint") return Number(value);
+  if (typeof value === "string" && /^\d+$/u.test(value.trim())) return Number(value.trim());
+  return null;
+}
+
+function asBig(value: unknown): bigint | null {
+  try {
+    if (typeof value === "bigint") return value;
+    if (typeof value === "number" && Number.isInteger(value)) return BigInt(value);
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (/^0x[0-9a-fA-F]+$/u.test(trimmed) || /^\d+$/u.test(trimmed)) return BigInt(trimmed);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function asHex(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return /^0x[0-9a-fA-F]*$/u.test(trimmed) ? trimmed.toLowerCase() : null;
+}
+
+/** Adapt a node-decoded native event to a `SeatAdvertisedEvent`; null if incomplete. */
+function decodedToSeatAdvertised(decoded: NativeDecodedEvent): SeatAdvertisedEvent | null {
+  const clusterId = asNum(firstDefined(decoded, ["clusterId", "cluster_id"]));
+  const seatId = asNum(firstDefined(decoded, ["seatId", "seat_id"]));
+  const advertiser = asHex(firstDefined(decoded, ["advertiser"]));
+  const kind = asNum(firstDefined(decoded, ["kind", "seat_kind", "seatKind"]));
+  const seatCount = asNum(firstDefined(decoded, ["seatCount", "seat_count"]));
+  const minBond = asBig(firstDefined(decoded, ["minBondLythoshi", "min_bond_lythoshi", "minBond", "min_bond"]));
+  const capabilityMask = asNum(firstDefined(decoded, ["capabilityMask", "capability_mask"]));
+  const termsHash = asHex(firstDefined(decoded, ["termsHash", "terms_hash"]));
+  if (
+    clusterId === null || seatId === null || advertiser === null || kind === null ||
+    seatCount === null || minBond === null || capabilityMask === null || termsHash === null
+  ) {
+    return null;
+  }
+  return { clusterId, seatId, advertiser, kind, seatCount, minBondLythoshi: minBond, capabilityMask, termsHash };
+}
+
+function decodedToSeatApplied(decoded: NativeDecodedEvent): SeatAppliedEvent | null {
+  const clusterId = asNum(firstDefined(decoded, ["clusterId", "cluster_id"]));
+  const seatId = asNum(firstDefined(decoded, ["seatId", "seat_id"]));
+  const operatorId = asHex(firstDefined(decoded, ["operatorId", "operator_id"]));
+  const owner = asHex(firstDefined(decoded, ["owner"]));
+  const escrow = asBig(firstDefined(decoded, ["escrowLythoshi", "escrow_lythoshi", "escrow"]));
+  if (clusterId === null || seatId === null) return null;
+  return { clusterId, seatId, operatorId: operatorId ?? "0x", owner: owner ?? "0x", escrowLythoshi: escrow ?? 0n };
+}
+
+function decodedToSeatFilled(decoded: NativeDecodedEvent): SeatFilledEvent | null {
+  const clusterId = asNum(firstDefined(decoded, ["clusterId", "cluster_id"]));
+  const seatId = asNum(firstDefined(decoded, ["seatId", "seat_id"]));
+  const operatorId = asHex(firstDefined(decoded, ["operatorId", "operator_id"]));
+  const filledCount = asNum(firstDefined(decoded, ["filledCount", "filled_count"]));
+  const seatCount = asNum(firstDefined(decoded, ["seatCount", "seat_count"]));
+  if (clusterId === null || seatId === null || filledCount === null || seatCount === null) return null;
+  return { clusterId, seatId, operatorId: operatorId ?? "0x", filledCount, seatCount };
+}
+
+function decodedToSeatClosed(decoded: NativeDecodedEvent): SeatClosedEvent | null {
+  const clusterId = asNum(firstDefined(decoded, ["clusterId", "cluster_id"]));
+  const seatId = asNum(firstDefined(decoded, ["seatId", "seat_id"]));
+  const status = asNum(firstDefined(decoded, ["status"]));
+  if (clusterId === null || seatId === null) return null;
+  return { clusterId, seatId, status: status ?? SEAT_STATUS_CODES.closed };
+}
+
 /**
- * operator_open_seats — HONEST status. There is no on-chain open-seat primitive
- * yet, so this returns a "marketplace launching" status with 0 open seats and
- * lists the live clusters for context only. Seats are never fabricated.
+ * Fold decoded seat events into live `OpenSeatView` listings. Each
+ * `SeatAdvertised` seeds a fresh listing; `SeatFilled` advances the running
+ * counts (flipping to `filled` once full); `SeatClosed` marks it closed. Matched
+ * on `(clusterId, seatId)`, sorted by cluster then seat. Pure — no I/O.
+ */
+export function foldSeatEvents(batch: SeatEventBatch): OpenSeatView[] {
+  const seats = new Map<string, OpenSeatView>();
+  for (const event of batch.advertised) {
+    seats.set(seatKey(event.clusterId, event.seatId), openSeatFromAdvertised(event));
+  }
+  for (const event of batch.filled) {
+    const seat = seats.get(seatKey(event.clusterId, event.seatId));
+    if (!seat) continue;
+    const filledCount = Math.max(seat.filledCount, event.filledCount);
+    const seatCount = Math.max(seat.seatCount, event.seatCount);
+    seats.set(seatKey(event.clusterId, event.seatId), {
+      ...seat,
+      filledCount,
+      seatCount,
+      status: seat.status === "closed" ? "closed" : filledCount >= seatCount ? "filled" : seat.status,
+    });
+  }
+  for (const event of batch.closed) {
+    const seat = seats.get(seatKey(event.clusterId, event.seatId));
+    if (!seat) continue;
+    const decodedStatus = seatStatusFromByte(event.status);
+    seats.set(seatKey(event.clusterId, event.seatId), {
+      ...seat,
+      status: decodedStatus === "none" ? "closed" : decodedStatus,
+    });
+  }
+  return [...seats.values()].sort((a, b) => a.clusterId - b.clusterId || a.seatId - b.seatId);
+}
+
+/** Applications observed per `(clusterId, seatId)`, from `SeatApplied` events. */
+function countApplications(applied: readonly SeatAppliedEvent[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const event of applied) {
+    const key = seatKey(event.clusterId, event.seatId);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+async function readSeatEventBatch(
+  c: RpcClient,
+  range: { fromBlock: number; toBlock: number; limit?: number },
+): Promise<SeatEventBatch> {
+  const base = { fromBlock: range.fromBlock, toBlock: range.toBlock, limit: range.limit ?? null };
+  const [advertised, applied, filled, closed] = await Promise.all([
+    c.lythNativeEventsTyped({ ...base, eventName: SEAT_EVENT_NAMES.advertised }),
+    c.lythNativeEventsTyped({ ...base, eventName: SEAT_EVENT_NAMES.applied }),
+    c.lythNativeEventsTyped({ ...base, eventName: SEAT_EVENT_NAMES.filled }),
+    c.lythNativeEventsTyped({ ...base, eventName: SEAT_EVENT_NAMES.closed }),
+  ]);
+  return {
+    advertised: advertised.events
+      .map((row) => decodedToSeatAdvertised(row.decoded))
+      .filter((event): event is SeatAdvertisedEvent => event !== null),
+    applied: applied.events
+      .map((row) => decodedToSeatApplied(row.decoded))
+      .filter((event): event is SeatAppliedEvent => event !== null),
+    filled: filled.events
+      .map((row) => decodedToSeatFilled(row.decoded))
+      .filter((event): event is SeatFilledEvent => event !== null),
+    closed: closed.events
+      .map((row) => decodedToSeatClosed(row.decoded))
+      .filter((event): event is SeatClosedEvent => event !== null),
+  };
+}
+
+/**
+ * operator_open_seats — LIVE read of the on-chain open-seat marketplace. Folds
+ * the L6 seat events (0x1005) into current vacancies. Returns real seat ids and
+ * status; 0 seats is a valid (and today's) result. Fail-closed: on RPC/indexer
+ * error it returns an empty seat list with the error surfaced, never fabricated.
  */
 export async function liveOperatorOpenSeats(endpoint: string, args: { limit?: number } = {}) {
   const c = liveClient(endpoint);
-  const directory = await c.lythClusterDirectory(0, 100);
-  const entries = directory.clusters.slice(0, args.limit ?? 50);
-  const statuses = await Promise.allSettled(entries.map((entry) => c.lythClusterStatus(entry.clusterId)));
-  const clusters = entries.map((entry, index) => {
-    const result = statuses[index];
-    const status = result.status === "fulfilled" ? result.value : null;
+  const limit = args.limit ?? 50;
+  try {
+    const head = Number(await c.ethBlockNumber());
+    const fromBlock = Math.max(SEAT_PRIMITIVE_ACTIVATION_HEIGHT, head - SEAT_DISCOVERY_WINDOW_BLOCKS);
+    const batch = await readSeatEventBatch(c, { fromBlock, toBlock: head });
+    const applications = countApplications(batch.applied);
+    const folded = foldSeatEvents(batch);
+    const openSeats = folded
+      .filter((seat) => seat.status === "open" && seat.filledCount < seat.seatCount)
+      .map((seat) => ({
+        clusterId: seat.clusterId,
+        seatId: seat.seatId,
+        kind: seat.kind,
+        status: seat.status,
+        advertiser: seat.advertiser,
+        seatCount: seat.seatCount,
+        filledCount: seat.filledCount,
+        minBondLythoshi: seat.minBondLythoshi.toString(),
+        capabilityMask: seat.capabilityMask,
+        termsHash: seat.termsHash,
+        applicationCount: applications.get(seatKey(seat.clusterId, seat.seatId)) ?? 0,
+      }))
+      .slice(0, limit);
     return {
-      clusterId: entry.clusterId,
-      size: entry.size,
-      threshold: entry.threshold,
-      active: entry.active,
-      membersFilled: status ? status.members.length : null,
-      openSeats: 0,
+      endpoint,
+      source: NODE_REGISTRY_SOURCE,
+      status: openSeats.length > 0
+        ? `${openSeats.length} live open seat(s)`
+        : "no live open seats advertised",
+      totalOpenSeats: openSeats.length,
+      scannedRange: { fromBlock, toBlock: head },
+      openSeats,
+      notes: [
+        "Live open-seat marketplace read from the L6 seat events on node-registry 0x1005 (advertiseSeat/applyForSeat/voteSeatAdmit/withdrawSeatApplication/closeSeat).",
+        "Seats are discovered from SeatAdvertised/SeatApplied/SeatFilled/SeatClosed events (there is no getOpenSeat view selector); an empty list means no vacancy is currently advertised.",
+        "Applicants escrow their full self-bond on applyForSeat; admission is a 7-of-10 cluster vote.",
+      ],
     };
-  });
+  } catch (error) {
+    return {
+      endpoint,
+      source: NODE_REGISTRY_SOURCE,
+      status: "seat read unavailable",
+      totalOpenSeats: 0,
+      openSeats: [] as never[],
+      error: error instanceof Error ? error.message : String(error),
+      notes: [
+        "The open-seat event read failed (RPC/indexer error); returning an empty list without inferring or fabricating seats.",
+      ],
+    };
+  }
+}
+
+/**
+ * cluster_get — one cluster, read live from the node-registry (0x1005), keyed on
+ * the on-chain numeric cluster id (the same ids cluster_search returns). Composes
+ * the live cluster record with its live reputation, foundation flag, operational
+ * (sunset) status and live operator roster. No bundled fixture data.
+ */
+export async function liveClusterGet(endpoint: string, clusterId: number) {
+  const [cluster, reputation, foundation, sunset, operators] = await Promise.all([
+    readLiveCluster(endpoint, clusterId),
+    liveClusterReputation(endpoint, clusterId),
+    liveClusterFoundationFlag(endpoint, clusterId),
+    liveClusterSunsetStatus(endpoint, clusterId),
+    searchLiveOperators(endpoint, { clusterId, limit: 50 }),
+  ]);
   return {
-    endpoint,
+    clusterId,
     source: NODE_REGISTRY_SOURCE,
-    status: "marketplace launching; no live on-chain seats yet",
-    openSeatPrimitive: "not_live",
-    totalOpenSeats: 0,
-    clusters,
+    cluster,
+    reputation,
+    foundation,
+    sunset,
+    operators,
     notes: [
-      "There is no on-chain open-seat / vacancy primitive yet. Cluster admission is mutual-consent formation (10-of-10) or the CJ-1 operator-request + 7-of-10 cluster vote, both coordinated off-chain.",
-      "Live clusters are listed for context only; 'openSeats' is reported as 0 and is never fabricated from planning metadata.",
+      "Live read from the on-chain node-registry (0x1005): directory, status, diversity, ServiceScore, entity flag and operator roster.",
+      "Commercial fields (price/capacity/hardware/gpuClass) have no on-chain representation and are not reported.",
+    ],
+  };
+}
+
+/**
+ * operator_get — one operator, read live from the node-registry (0x1005): its
+ * on-chain identity/bond, ASN/geo/hosting network metadata, and live cluster
+ * memberships derived from the cluster rosters. Returns found:false (never
+ * fabricated fixture data) when the operator is not on chain.
+ */
+export async function liveOperatorGet(endpoint: string, operatorId: string) {
+  const c = liveClient(endpoint);
+  const target = operatorId.toLowerCase();
+  const [infoResult, metaResult, directoryResult] = await Promise.allSettled([
+    c.lythOperatorInfo(operatorId),
+    c.lythGetOperatorNetworkMetadata(operatorId),
+    c.lythClusterDirectory(0, 100),
+  ]);
+  const info = infoResult.status === "fulfilled" ? infoResult.value : null;
+  const meta = metaResult.status === "fulfilled" ? metaResult.value : null;
+  const clusterIds = directoryResult.status === "fulfilled"
+    ? directoryResult.value.clusters.map((entry) => entry.clusterId)
+    : [];
+
+  const statuses = await Promise.allSettled(clusterIds.map((id) => c.lythClusterStatus(id)));
+  const memberships: { clusterId: number; state: string }[] = [];
+  statuses.forEach((result, index) => {
+    if (result.status !== "fulfilled") return;
+    const member = result.value.members.find((m) => m.operatorId.toLowerCase() === target);
+    if (member) memberships.push({ clusterId: clusterIds[index], state: member.state });
+  });
+
+  const found = info !== null || memberships.length > 0;
+  return {
+    operatorId,
+    source: NODE_REGISTRY_SOURCE,
+    found,
+    operator: info
+      ? {
+          operatorId: info.operatorId,
+          moniker: info.moniker,
+          alias: info.alias,
+          chainAddress: info.chainAddress,
+          bonded: info.bonded,
+          bondedAmount: info.bondedAmount,
+          lifecycleState: info.lifecycleState,
+          activeClusterIds: info.activeClusterIds,
+        }
+      : null,
+    network: meta ? { asn: meta.asn, geoRegion: meta.geoRegion, hostingClass: meta.hostingClass } : null,
+    memberships,
+    notes: [
+      "Live read from the on-chain node-registry (0x1005): operator identity/bond, network metadata and cluster memberships.",
+      "Live open seats an operator can apply to are reported by operator_open_seats.",
     ],
   };
 }
