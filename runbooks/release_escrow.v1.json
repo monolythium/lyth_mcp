@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "release_escrow",
+  "status": "draft_only",
+  "purpose": "Draft the release of escrowed funds to the counterparty once the deliverable is accepted (native escrow release on 0x110A).",
+  "requiredFields": ["escrowId", "counterparty"],
+  "optionalFields": ["amount", "asset", "acceptanceEvidence", "receipt", "memo", "notes"],
+  "approvalRequired": true,
+  "steps": [
+    "check_policy",
+    "verify_deliverable",
+    "request_approval",
+    "submit_release",
+    "record_receipt"
+  ]
+}
