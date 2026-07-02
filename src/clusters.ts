@@ -974,9 +974,11 @@ function decodedToSeatApplied(decoded: NativeDecodedEvent): SeatAppliedEvent | n
   const seatId = asNum(firstDefined(decoded, ["seatId", "seat_id"]));
   const operatorId = asHex(firstDefined(decoded, ["operatorId", "operator_id"]));
   const owner = asHex(firstDefined(decoded, ["owner"]));
-  const escrow = asBig(firstDefined(decoded, ["escrowLythoshi", "escrow_lythoshi", "escrow"]));
+  const bond = asBig(
+    firstDefined(decoded, ["bondLythoshi", "bond_lythoshi", "escrowLythoshi", "escrow_lythoshi", "escrow"]),
+  );
   if (clusterId === null || seatId === null) return null;
-  return { clusterId, seatId, operatorId: operatorId ?? "0x", owner: owner ?? "0x", escrowLythoshi: escrow ?? 0n };
+  return { clusterId, seatId, operatorId: operatorId ?? "0x", owner: owner ?? "0x", bondLythoshi: bond ?? 0n };
 }
 
 function decodedToSeatFilled(decoded: NativeDecodedEvent): SeatFilledEvent | null {
