@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "refund_payment",
+  "status": "draft_only",
+  "purpose": "Draft a timeout or dispute refund of escrowed funds back to the payer (native escrow refund on 0x110A).",
+  "requiredFields": ["escrowId", "payer"],
+  "optionalFields": ["amount", "asset", "reason", "deadlinePassed", "receipt", "memo", "notes"],
+  "approvalRequired": true,
+  "steps": [
+    "check_policy",
+    "verify_refund_conditions",
+    "request_approval",
+    "submit_refund",
+    "record_receipt"
+  ]
+}
