@@ -301,8 +301,8 @@ import {
 const DEFAULT_CHAIN_ID = 69420;
 const DEFAULT_NETWORK = "testnet-69420";
 // Live service-reward chain (genesis
-// 0x5d5c36efebc5c18a487f6929313343a37f44562e5941b65d3c262eacf594891e,
-// re-genesised 2026-07-03, protocore v0.3.3-testnet / mono-core 92a44932).
+// 0x25fd542b65f9fabc471a5bd05eb154ef52e56e57a6ea703cc5224574fcb8706e,
+// re-genesised 2026-07-04, protocore v0.3.4-testnet / mono-core 81ff5a2d).
 // Override with LYTH_RPC_URLS for a different fleet.
 const DEFAULT_RPCS = [
   "http://178.105.12.9:8545",
