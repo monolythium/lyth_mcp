@@ -52,6 +52,7 @@ export interface SteleNetworkIdentitySuccess {
     readonly stage: string;
     readonly network: string;
     readonly walletAuthEnabled: boolean;
+    readonly oauthEnabled: boolean;
     readonly economicWritesEnabled: boolean;
     readonly hostedSigningEnabled: false;
   };
@@ -147,6 +148,7 @@ export class SteleNetworkIdentityGuard {
         stage: meta.stage,
         network: meta.network,
         walletAuthEnabled: meta.walletAuthEnabled,
+        oauthEnabled: meta.oauthEnabled,
         economicWritesEnabled: meta.economicWritesEnabled,
         hostedSigningEnabled: meta.hostedSigningEnabled,
       },

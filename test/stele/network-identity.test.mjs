@@ -19,6 +19,7 @@ function metadata(overrides = {}) {
     chainId: expected.chainId,
     genesisHash: expected.genesisHash,
     walletAuthEnabled: true,
+    oauthEnabled: true,
     economicWritesEnabled: false,
     hostedSigningEnabled: false,
     ...overrides,
