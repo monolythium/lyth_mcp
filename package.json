@@ -14,6 +14,7 @@
     "dist",
     "README.md",
     "LICENSE",
+    "npm-shrinkwrap.json",
     "docs/CLAUDE_CODE_EXAMPLES.md",
     "docs/EXTERNAL_COMMERCE.md",
     "docs/OPERATOR_GUIDE.md",

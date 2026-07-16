@@ -87,9 +87,15 @@ From this repository:
 
 ```bash
 cd repos/monolythium/lyth_mcp
-npm install
+npm ci --ignore-scripts
 npm run build
+npm run prepare
 ```
+
+The source checkout intentionally verifies built artifacts during its
+`prepare` lifecycle. Suppressing lifecycle scripts only for the initial clean
+dependency install lets TypeScript become available; the explicit build and
+prepare commands then produce and verify the release files in that order.
 
 `@monolythium/core-sdk` is exact-pinned to the reviewed public `0.6.8` npm
 release. The release tarball, SBOM, checksum file, and keyless signature bundles

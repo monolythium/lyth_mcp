@@ -39,7 +39,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION=$(node -p "require('./package.json').version")
-          LOCK_VERSION=$(node -p "require('./package-lock.json').version")
+          LOCK_VERSION=$(node -p "require('./npm-shrinkwrap.json').version")
           if [[ "$VERSION" != "$LOCK_VERSION" ]]; then
             echo "::error::package and lockfile versions differ"
             exit 1
@@ -89,6 +89,8 @@ jobs:
             echo "::error::package archive crossed the public runtime boundary"
             exit 1
           fi
+          test "$(grep -c '^package/npm-shrinkwrap.json$' package-files.txt)" -eq 1
+          cmp npm-shrinkwrap.json <(tar -xOzf "$ARCHIVE" package/npm-shrinkwrap.json)
 
       - name: Extract package for SBOM
         shell: bash
@@ -98,6 +100,11 @@ jobs:
           set -euo pipefail
           mkdir release-root
           tar -xzf "lyth-mcp-${VERSION}.tgz" -C release-root
+          npm ci --prefix release-root/package --omit=dev --ignore-scripts --no-audit --no-fund
+          # Syft v1.46.0 recognizes npm's package-lock filename but not its
+          # publishable, byte-equivalent npm-shrinkwrap filename. The alias is
+          # staging-only and lets the pinned lock cataloger emit the exact graph.
+          cp release-root/package/npm-shrinkwrap.json release-root/package/package-lock.json
 
       - name: Generate SPDX SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
@@ -106,6 +113,7 @@ jobs:
           format: spdx-json
           output-file: lyth-mcp-${{ steps.version.outputs.version }}.spdx.json
           syft-version: v1.46.0
+          config: .github/syft-release.yaml
           dependency-snapshot: false
           upload-artifact: false
           upload-release-assets: false
@@ -118,7 +126,17 @@ jobs:
           set -euo pipefail
           ARCHIVE="lyth-mcp-${VERSION}.tgz"
           SBOM="lyth-mcp-${VERSION}.spdx.json"
-          jq -e '.spdxVersion | startswith("SPDX-")' "$SBOM" >/dev/null
+          jq -e --arg version "$VERSION" '
+            (.spdxVersion | startswith("SPDX-")) and
+            ([.packages[] | select(.name == "lyth-mcp" and .versionInfo == $version)] | length == 1) and
+            ([.packages[] | select(.name == "@modelcontextprotocol/sdk" and .versionInfo == "1.29.0")] | length >= 1) and
+            ([.packages[] | select(.name == "@monolythium/core-sdk" and .versionInfo == "0.6.8")] | length == 1) and
+            ([.packages[] | select(.name == "zod" and .versionInfo == "3.25.76")] | length >= 1) and
+            ([.packages[] | select(any(.externalRefs[]?;
+              .referenceType == "purl" and (.referenceLocator | startswith("pkg:npm/"))
+            ))] | length >= 100) and
+            ([.relationships[] | select(.relationshipType == "DEPENDENCY_OF")] | length >= 3)
+          ' "$SBOM" >/dev/null
           sha256sum -- "$ARCHIVE" "$SBOM" > SHA256SUMS
           sha256sum --check --strict SHA256SUMS
 
