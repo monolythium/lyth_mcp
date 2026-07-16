@@ -300,10 +300,9 @@ import {
 
 const DEFAULT_CHAIN_ID = 69420;
 const DEFAULT_NETWORK = "testnet-69420";
-// Live service-reward chain (genesis
-// 0x25fd542b65f9fabc471a5bd05eb154ef52e56e57a6ea703cc5224574fcb8706e,
-// re-genesised 2026-07-04, protocore v0.3.4-testnet / mono-core 81ff5a2d).
-// Override with LYTH_RPC_URLS for a different fleet.
+// Legacy profile: this path verifies chain ID but not genesis and is not a
+// Stele trust boundary. Use lyth-stele-mcp for genesis-verified Stele reads.
+// Override with LYTH_RPC_URLS only for explicitly managed legacy fleets.
 const DEFAULT_RPCS = [
   "http://178.105.12.9:8545",
 ];

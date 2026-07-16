@@ -2,6 +2,18 @@ node_modules/
 dist/
 *.tsbuildinfo
 .env
+.env.*
+!.env.example
 .DS_Store
 npm-debug.log*
 TODO.md
+
+# Local/private planning material must never enter this public repository.
+.local/
+.internal/
+**/.local/
+**/.internal/
+docs/internal/
+docs/private/
+*.internal.*
+*_INTERNAL.md

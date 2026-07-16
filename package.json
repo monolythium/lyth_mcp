@@ -7,13 +7,18 @@
   "private": false,
   "bin": {
     "lyth-mcp": "dist/index.js",
-    "lyth-dev-mcp": "dist/dev_index.js"
+    "lyth-dev-mcp": "dist/dev_index.js",
+    "lyth-stele-mcp": "dist/stele_index.js"
   },
   "files": [
     "dist",
     "README.md",
     "LICENSE",
-    "docs",
+    "docs/CLAUDE_CODE_EXAMPLES.md",
+    "docs/EXTERNAL_COMMERCE.md",
+    "docs/OPERATOR_GUIDE.md",
+    "docs/RUNBOOK_GUIDE.md",
+    "docs/VENDOR_REGISTRY.md",
     "examples",
     "fixtures",
     "runbooks",
@@ -28,14 +33,17 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
+    "start:stele": "node dist/stele_index.js",
     "dev": "tsx src/index.ts",
+    "dev:stele": "tsx src/stele_index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node scripts/smoke.mjs && node scripts/native-dev-profile-smoke.mjs",
+    "test": "npm run build && node scripts/smoke.mjs && node scripts/native-dev-profile-smoke.mjs && node --test --test-concurrency=1 test/stele/*.test.mjs",
+    "test:stele": "npm run build && node --test --test-concurrency=1 test/stele/*.test.mjs",
     "prepare": "node scripts/verify-dist.cjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
-    "@monolythium/core-sdk": "^0.6.4",
+    "@monolythium/core-sdk": "0.6.8",
     "zod": "3.25.76"
   },
   "devDependencies": {

@@ -104,6 +104,36 @@ For development:
 npm run dev
 ```
 
+## Isolated Stele Profile
+
+Stele uses a separate MCP entry point. It does not register or import the legacy wallet, signing, submission, connector, or local-vendor tools:
+
+```bash
+npm run start:stele
+```
+
+The profile exposes exactly three read-only tools:
+
+| Tool | Purpose |
+|---|---|
+| `stele_connection_status` | Re-read and compare the SDK pin, a genesis-verified trusted operator, and Stele metadata |
+| `stele_search_services` | Search public Stele listings after a fresh identity check |
+| `stele_agent_wallet_status` | Report the unavailable dedicated-agent keystore boundary without opening a key |
+
+Economic execution is intentionally unavailable in this foundation slice. The Stele entry point cannot import, reveal, unlock, sign, or submit, and it never inspects desktop, browser, or legacy MCP wallet stores.
+
+Production reads are pinned to `https://stele.monolythium.com`. Local LAN testing is opt-in. Supply the same operator-controlled origin for both variables, replacing the documentation placeholder with a canonical dotted RFC1918 IPv4 address served over HTTP on effective port 80:
+
+```bash
+export STELE_PRIVATE_LAN_ORIGIN='http://<canonical-rfc1918-ipv4>'
+LYTH_MCP_STELE_API_ORIGIN="$STELE_PRIVATE_LAN_ORIGIN" \
+LYTH_MCP_STELE_PUBLIC_ORIGIN="$STELE_PRIVATE_LAN_ORIGIN" \
+LYTH_MCP_STELE_ALLOW_INSECURE_LAN=1 \
+npm run start:stele
+```
+
+DNS names, IPv6, alternate numeric IP encodings, public and special-use addresses, non-default ports, origin mismatches, and credential/path/query/fragment additions are rejected. Redirects, non-JSON responses, oversized bodies, malformed schemas, missing genesis identity, and any chain/genesis disagreement fail closed. Do not enable insecure LAN mode outside the local development network, and keep the concrete origin in untracked local environment configuration.
+
 ## Claude Desktop Example
 
 After building, add an MCP server entry like this:
