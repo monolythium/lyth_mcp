@@ -70,16 +70,17 @@ The MCP is allowed to help. The user controls funding, policy, passphrases, and 
 
 ## Install
 
-Global install from GitHub:
+Install the reviewed `v0.1.0` release artifact from GitHub:
 
 ```bash
-npm install -g https://github.com/monolythium/lyth_mcp/archive/refs/heads/main.tar.gz
+npm install --global https://github.com/monolythium/lyth_mcp/releases/download/v0.1.0/lyth-mcp-0.1.0.tgz
 ```
 
-If you specifically want npm's git resolver, use `--install-links=true` with npm 10:
+For source development, clone the exact tag instead of installing a mutable
+default branch:
 
 ```bash
-npm install -g --install-links=true git+https://github.com/monolythium/lyth_mcp.git
+git clone --branch v0.1.0 --depth 1 https://github.com/monolythium/lyth_mcp.git
 ```
 
 From this repository:
@@ -90,7 +91,9 @@ npm install
 npm run build
 ```
 
-`@monolythium/core-sdk` is installed from the public GitHub repo `monolythium/mono-core-sdk` through a pinned HTTPS tarball, so this MCP can be installed outside the local monorepo without a nested git build.
+`@monolythium/core-sdk` is exact-pinned to the reviewed public `0.6.8` npm
+release. The release tarball, SBOM, checksum file, and keyless signature bundles
+are attached to the matching GitHub tag.
 
 Run the server over stdio:
 
@@ -110,6 +113,12 @@ Stele uses a separate MCP entry point. It does not register or import the legacy
 
 ```bash
 npm run start:stele
+```
+
+After a global release install, the equivalent command is:
+
+```bash
+lyth-stele-mcp
 ```
 
 The profile exposes exactly three read-only tools:
@@ -133,6 +142,28 @@ npm run start:stele
 ```
 
 DNS names, IPv6, alternate numeric IP encodings, public and special-use addresses, non-default ports, origin mismatches, and credential/path/query/fragment additions are rejected. Redirects, non-JSON responses, oversized bodies, malformed schemas, missing genesis identity, and any chain/genesis disagreement fail closed. Do not enable insecure LAN mode outside the local development network, and keep the concrete origin in untracked local environment configuration.
+
+### Codex
+
+Codex CLI, the Codex IDE extension, and the ChatGPT desktop app share the same
+local MCP configuration. After installing the release artifact, add the isolated
+profile and verify it:
+
+```bash
+codex mcp add stele -- lyth-stele-mcp
+codex mcp list
+```
+
+For a hand-edited configuration, copy `examples/codex_stele_config.toml` into
+your user `~/.codex/config.toml` or a trusted project's `.codex/config.toml`,
+then restart the client. The example allowlists the same exact three tools.
+
+### Claude Desktop
+
+Copy the `stele` entry from `examples/claude_desktop_stele_config.json` into
+Claude Desktop's MCP configuration, then restart Claude Desktop. The command is
+the globally installed `lyth-stele-mcp` executable and carries no wallet-store,
+passphrase, signing, or submission environment variables.
 
 ## Claude Desktop Example
 

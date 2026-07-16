@@ -1,0 +1,228 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+concurrency:
+  group: lyth-mcp-release
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  build:
+    name: Test and build release artifact
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.22.1
+          package-manager-cache: false
+
+      - name: Validate source version and release tag
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          LOCK_VERSION=$(node -p "require('./package-lock.json').version")
+          if [[ "$VERSION" != "$LOCK_VERSION" ]]; then
+            echo "::error::package and lockfile versions differ"
+            exit 1
+          fi
+          if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::package version is not canonical semver"
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_TYPE" != "tag" || "$GITHUB_REF_NAME" != "v$VERSION" ]]; then
+            echo "::error::tag '$GITHUB_REF_NAME' does not match package version '$VERSION'"
+            exit 1
+          fi
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::release tag commit is not contained in origin/main"
+            exit 1
+          fi
+          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Check types
+        run: npm run typecheck
+
+      - name: Run full test suite
+        run: npm test
+
+      - name: Build deterministic package twice
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/pack-a /tmp/pack-b
+          npm pack --ignore-scripts --pack-destination /tmp/pack-a >/dev/null
+          npm pack --ignore-scripts --pack-destination /tmp/pack-b >/dev/null
+          ARCHIVE="lyth-mcp-${VERSION}.tgz"
+          cmp "/tmp/pack-a/${ARCHIVE}" "/tmp/pack-b/${ARCHIVE}"
+          cp "/tmp/pack-a/${ARCHIVE}" "$ARCHIVE"
+          tar -tzf "$ARCHIVE" > package-files.txt
+          if grep -Ev '^package/' package-files.txt | grep -q .; then
+            echo "::error::package archive contains an entry outside package/"
+            exit 1
+          fi
+          if grep -E '(^|/)(src|test|\.local|\.internal|internal|private|secrets?)(/|$)' package-files.txt; then
+            echo "::error::package archive crossed the public runtime boundary"
+            exit 1
+          fi
+
+      - name: Extract package for SBOM
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir release-root
+          tar -xzf "lyth-mcp-${VERSION}.tgz" -C release-root
+
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+        with:
+          path: release-root/package
+          format: spdx-json
+          output-file: lyth-mcp-${{ steps.version.outputs.version }}.spdx.json
+          syft-version: v1.46.0
+          dependency-snapshot: false
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Validate SBOM and write checksums
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          ARCHIVE="lyth-mcp-${VERSION}.tgz"
+          SBOM="lyth-mcp-${VERSION}.spdx.json"
+          jq -e '.spdxVersion | startswith("SPDX-")' "$SBOM" >/dev/null
+          sha256sum -- "$ARCHIVE" "$SBOM" > SHA256SUMS
+          sha256sum --check --strict SHA256SUMS
+
+      - name: Upload unsigned release inputs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: lyth-mcp-${{ steps.version.outputs.version }}-release-inputs
+          path: |
+            lyth-mcp-${{ steps.version.outputs.version }}.tgz
+            lyth-mcp-${{ steps.version.outputs.version }}.spdx.json
+            SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
+
+  sign:
+    name: Sign and verify release artifact
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download unsigned release inputs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: lyth-mcp-${{ needs.build.outputs.version }}-release-inputs
+          path: release-inputs
+          digest-mismatch: error
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+        with:
+          cosign-release: v3.1.1
+
+      - name: Verify checksums and sign release inputs
+        shell: bash
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        working-directory: release-inputs
+        run: |
+          set -euo pipefail
+          ARCHIVE="lyth-mcp-${VERSION}.tgz"
+          SBOM="lyth-mcp-${VERSION}.spdx.json"
+          IDENTITY="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}"
+          ISSUER="https://token.actions.githubusercontent.com"
+          sha256sum --check --strict SHA256SUMS
+          for FILE in "$ARCHIVE" "$SBOM" SHA256SUMS; do
+            cosign sign-blob --yes --bundle "${FILE}.cosign.bundle" "$FILE"
+            cosign verify-blob --bundle "${FILE}.cosign.bundle" \
+              --certificate-identity "$IDENTITY" \
+              --certificate-oidc-issuer "$ISSUER" "$FILE"
+          done
+
+      - name: Upload signature bundles
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: lyth-mcp-${{ needs.build.outputs.version }}-signatures
+          path: release-inputs/*.cosign.bundle
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
+
+  release:
+    name: Create draft GitHub release
+    needs: [build, sign]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download release inputs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: lyth-mcp-${{ needs.build.outputs.version }}-release-inputs
+          path: release-assets
+          digest-mismatch: error
+
+      - name: Download signature bundles
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: lyth-mcp-${{ needs.build.outputs.version }}-signatures
+          path: release-assets
+          digest-mismatch: error
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: true
+          prerelease: true
+          generate_release_notes: true
+          make_latest: false
+          overwrite_files: false
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/lyth-mcp-${{ needs.build.outputs.version }}.tgz
+            release-assets/lyth-mcp-${{ needs.build.outputs.version }}.spdx.json
+            release-assets/SHA256SUMS
+            release-assets/lyth-mcp-${{ needs.build.outputs.version }}.tgz.cosign.bundle
+            release-assets/lyth-mcp-${{ needs.build.outputs.version }}.spdx.json.cosign.bundle
+            release-assets/SHA256SUMS.cosign.bundle

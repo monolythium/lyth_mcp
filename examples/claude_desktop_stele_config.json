@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "stele": {
+      "command": "lyth-stele-mcp"
+    }
+  }
+}
