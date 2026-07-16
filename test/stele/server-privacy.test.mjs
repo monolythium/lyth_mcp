@@ -27,6 +27,7 @@ const verified = {
     stage: "data-auth",
     network: "testnet",
     walletAuthEnabled: true,
+    oauthEnabled: true,
     economicWritesEnabled: false,
     hostedSigningEnabled: false,
   },
@@ -182,7 +183,8 @@ test("strict tool input and output schemas prevent secret smuggling", async () =
             providerDisplayName: "mono1qqqqqqqq",
             category: "legal",
             workflowKind: "project",
-            publicUrl: "https://stele.monolythium.com/services/contract-review",
+            publicUrl:
+              "https://stele.monolythium.com/services/018f1f7a-7b1c-7a2d-8e3f-123456789abc/contract-review",
             secret: secretFromApi,
           },
         ],

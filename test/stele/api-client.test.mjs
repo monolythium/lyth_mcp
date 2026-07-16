@@ -44,6 +44,7 @@ function metadata(overrides = {}) {
     chainId: "69420",
     genesisHash: GENESIS,
     walletAuthEnabled: true,
+    oauthEnabled: true,
     economicWritesEnabled: false,
     hostedSigningEnabled: false,
     ...overrides,
@@ -192,7 +193,10 @@ test("service search validates both input and the complete upstream response", a
   assert.equal(observedUrl.searchParams.get("q"), "contract review");
   assert.equal(observedUrl.searchParams.get("category"), "legal");
   assert.equal(observedUrl.searchParams.get("cursor"), "page_1");
-  assert.equal(page.items[0].publicUrl, "https://stele.monolythium.com/services/contract-review");
+  assert.equal(
+    page.items[0].publicUrl,
+    "https://stele.monolythium.com/services/018f1f7a-7b1c-7a2d-8e3f-123456789abc/contract-review",
+  );
   assert.equal(page.nextCursor, "next_page");
 
   await assert.rejects(
@@ -234,14 +238,21 @@ test("service search validates both input and the complete upstream response", a
     async () => jsonResponse({ items: [service] }),
   );
   const lanPage = await lanClient.searchServices({ limit: 1 });
-  assert.equal(lanPage.items[0].publicUrl, `${PRIVATE_LAN_ORIGIN}/services/contract-review`);
+  assert.equal(
+    lanPage.items[0].publicUrl,
+    `${PRIVATE_LAN_ORIGIN}/services/018f1f7a-7b1c-7a2d-8e3f-123456789abc/contract-review`,
+  );
 
   assert.equal(StelePublicServiceOutputSchema.safeParse(lanPage.items[0]).success, true);
   for (const publicUrl of [
-    "http://8.8.8.8/services/contract-review",
-    "http://167772161/services/contract-review",
-    `${PRIVATE_LAN_ORIGIN}:8080/services/contract-review`,
-    `${PRIVATE_LAN_ORIGIN}/services/contract-review?token=secret`,
+    "http://8.8.8.8/services/018f1f7a-7b1c-7a2d-8e3f-123456789abc/contract-review",
+    "http://167772161/services/018f1f7a-7b1c-7a2d-8e3f-123456789abc/contract-review",
+    `${PRIVATE_LAN_ORIGIN}:8080/services/018f1f7a-7b1c-7a2d-8e3f-123456789abc/contract-review`,
+    `${PRIVATE_LAN_ORIGIN}/services/018f1f7a-7b1c-7a2d-8e3f-123456789abc/contract-review?token=secret`,
+    `${PRIVATE_LAN_ORIGIN}/services/contract-review`,
+    `${PRIVATE_LAN_ORIGIN}/services/018f1f7a-7b1c-7a2d-8e3f-123456789abc/contract-review/extra`,
+    `${PRIVATE_LAN_ORIGIN}/services/018f1f7a-7b1c-7a2d-8e3f-123456789abd/contract-review`,
+    `${PRIVATE_LAN_ORIGIN}/services/018f1f7a-7b1c-7a2d-8e3f-123456789abc/different-slug`,
   ]) {
     assert.equal(
       StelePublicServiceOutputSchema.safeParse({ ...lanPage.items[0], publicUrl }).success,

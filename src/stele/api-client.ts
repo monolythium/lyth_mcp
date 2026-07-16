@@ -38,6 +38,7 @@ export const SteleMetaSchema = z
     chainId: CanonicalUint256Schema,
     genesisHash: z.string().regex(HASH_32),
     walletAuthEnabled: z.boolean(),
+    oauthEnabled: z.boolean(),
     economicWritesEnabled: z.boolean(),
     hostedSigningEnabled: z.literal(false),
   })
@@ -90,18 +91,35 @@ export const StelePublicServiceOutputSchema = PublicServiceSchema.extend({
       const url = new URL(value);
       const rawOrigin = value.slice(0, value.length - url.pathname.length);
       const permittedOrigin =
-        rawOrigin === STELE_PRODUCTION_ORIGIN ||
-        privateLanOrigin(rawOrigin) !== null;
+        rawOrigin === STELE_PRODUCTION_ORIGIN || privateLanOrigin(rawOrigin) !== null;
+      const [, services, listingId, slug, extra] = url.pathname.split("/");
       return (
         permittedOrigin &&
         url.username === "" &&
         url.password === "" &&
         url.search === "" &&
         url.hash === "" &&
-        /^\/services\/[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(url.pathname)
+        services === "services" &&
+        listingId !== undefined &&
+        UUID_V7.test(listingId) &&
+        slug !== undefined &&
+        SLUG.test(slug) &&
+        extra === undefined
       );
     }),
-}).strict();
+})
+  .strict()
+  .superRefine((service, context) => {
+    const url = new URL(service.publicUrl);
+    const expectedPath = `/services/${service.id}/${service.slug}`;
+    if (url.pathname !== expectedPath) {
+      context.addIssue({
+        code: "custom",
+        path: ["publicUrl"],
+        message: "public service URL does not match the listing identity",
+      });
+    }
+  });
 
 export const SteleServiceSearchPageOutputSchema = z
   .object({
@@ -214,7 +232,10 @@ export class SteleApiClient implements SteleApiReader {
 
     const items = parsed.data.items.map((item) => ({
       ...item,
-      publicUrl: new URL(`/services/${encodeURIComponent(item.slug)}`, this.#publicOrigin).toString(),
+      publicUrl: new URL(
+        `/services/${encodeURIComponent(item.id)}/${encodeURIComponent(item.slug)}`,
+        this.#publicOrigin,
+      ).toString(),
     }));
     return {
       items,
