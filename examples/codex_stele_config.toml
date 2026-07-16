@@ -1,0 +1,9 @@
+[mcp_servers.stele]
+command = "lyth-stele-mcp"
+required = true
+enabled_tools = [
+  "stele_connection_status",
+  "stele_search_services",
+  "stele_agent_wallet_status",
+]
+default_tools_approval_mode = "auto"

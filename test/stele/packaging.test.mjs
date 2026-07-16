@@ -21,7 +21,7 @@ const steleRuntimeModules = [
 
 test("the public package exact-pins the reviewed SDK release", async () => {
   const packageJson = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
-  const lock = JSON.parse(await readFile(resolve(root, "package-lock.json"), "utf8"));
+  const lock = JSON.parse(await readFile(resolve(root, "npm-shrinkwrap.json"), "utf8"));
   assert.equal(packageJson.dependencies["@monolythium/core-sdk"], "0.6.8");
   assert.equal(lock.packages[""].dependencies["@monolythium/core-sdk"], "0.6.8");
   assert.equal(lock.packages["node_modules/@monolythium/core-sdk"].version, "0.6.8");
@@ -54,6 +54,7 @@ test("npm packing includes the Stele runtime but no source, tests, or private/in
   const paths = report.files.map((entry) => entry.path);
 
   for (const required of [
+    "npm-shrinkwrap.json",
     ...steleRuntimeModules,
     ...steleRuntimeModules.map((path) => path.replace(/\.js$/u, ".d.ts")),
   ]) {
@@ -70,9 +71,11 @@ test("npm packing includes the Stele runtime but no source, tests, or private/in
   }
 });
 
-test("the installed package's Stele executable exposes only the three read-only tools", async (t) => {
+test("the installed package has a deterministic closure and only three Stele tools", async (t) => {
   const temporary = await mkdtemp(join(tmpdir(), "lyth-stele-pack-"));
-  t.after(async () => rm(temporary, { recursive: true, force: true }));
+  t.after(async () => {
+    await rm(temporary, { recursive: true, force: true });
+  });
 
   const output = execFileSync(
     "npm",
@@ -81,15 +84,31 @@ test("the installed package's Stele executable exposes only the three read-only 
   );
   const report = JSON.parse(output)[0];
   const archive = resolve(temporary, report.filename);
-  const installRoot = resolve(temporary, "install");
-  await mkdir(installRoot);
-  execFileSync(
-    "npm",
-    ["install", "--ignore-scripts", "--no-audit", "--no-fund", archive],
-    { cwd: installRoot, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 },
-  );
+  const installA = await installArchive(resolve(temporary, "install-a"), archive);
+  const installB = await installArchive(resolve(temporary, "install-b"), archive);
+  assert.deepEqual(installA.tree, installB.tree);
+  assert.equal(installA.inventory.length >= 100, true);
+  for (const expected of [
+    "@modelcontextprotocol/sdk@1.29.0",
+    "@monolythium/core-sdk@0.6.8",
+    "lyth-mcp@0.1.0",
+    "zod@3.25.76",
+  ]) {
+    assert.equal(installA.inventory.includes(expected), true, `installed closure is missing ${expected}`);
+  }
 
-  const packedRoot = resolve(installRoot, "node_modules/lyth-mcp");
+  const sourceShrinkwrap = JSON.parse(
+    await readFile(resolve(root, "npm-shrinkwrap.json"), "utf8"),
+  );
+  const packedShrinkwrap = JSON.parse(
+    execFileSync("tar", ["-xOzf", archive, "package/npm-shrinkwrap.json"], {
+      encoding: "utf8",
+      maxBuffer: 10 * 1024 * 1024,
+    }),
+  );
+  assert.deepEqual(packedShrinkwrap, sourceShrinkwrap);
+
+  const packedRoot = resolve(installA.root, "node_modules/lyth-mcp");
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [resolve(packedRoot, "dist/stele_index.js")],
@@ -110,3 +129,52 @@ test("the installed package's Stele executable exposes only the three read-only 
     await client.close();
   }
 });
+
+async function installArchive(installRoot, archive) {
+  await mkdir(installRoot);
+  execFileSync(
+    "npm",
+    [
+      "install",
+      "--prefix",
+      installRoot,
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      archive,
+    ],
+    { cwd: root, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 },
+  );
+  const installed = JSON.parse(
+    execFileSync("npm", ["ls", "--prefix", installRoot, "--all", "--omit=dev", "--json"], {
+      cwd: root,
+      encoding: "utf8",
+      maxBuffer: 10 * 1024 * 1024,
+    }),
+  );
+  const tree = canonicalDependencyTree(installed.dependencies);
+  return { root: installRoot, tree, inventory: dependencyInventory(tree) };
+}
+
+function canonicalDependencyTree(dependencies = {}) {
+  return Object.fromEntries(
+    Object.entries(dependencies)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, value]) => [
+        name,
+        {
+          version: value.version,
+          dependencies: canonicalDependencyTree(value.dependencies),
+        },
+      ]),
+  );
+}
+
+function dependencyInventory(tree) {
+  const inventory = [];
+  for (const [name, value] of Object.entries(tree)) {
+    inventory.push(`${name}@${value.version}`);
+    inventory.push(...dependencyInventory(value.dependencies));
+  }
+  return inventory.sort();
+}
