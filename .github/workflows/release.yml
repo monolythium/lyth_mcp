@@ -27,6 +27,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Install Gitleaks
+        run: bash .github/scripts/install-gitleaks.sh
+
+      - name: Scan the current source tree for secrets
+        run: gitleaks dir . --redact=100 --no-banner --no-color
+
       - name: Install Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
@@ -89,10 +95,12 @@ jobs:
             echo "::error::package archive crossed the public runtime boundary"
             exit 1
           fi
+          sed 's#^package/##' package-files.txt | LC_ALL=C sort > package-files.actual
+          diff --unified=3 -- .github/package-files.allowlist.txt package-files.actual
           test "$(grep -c '^package/npm-shrinkwrap.json$' package-files.txt)" -eq 1
           cmp npm-shrinkwrap.json <(tar -xOzf "$ARCHIVE" package/npm-shrinkwrap.json)
 
-      - name: Extract package for SBOM
+      - name: Extract package for verification
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -100,6 +108,13 @@ jobs:
           set -euo pipefail
           mkdir release-root
           tar -xzf "lyth-mcp-${VERSION}.tgz" -C release-root
+
+      - name: Scan the release package for secrets
+        run: gitleaks dir release-root/package --redact=100 --no-banner --no-color
+
+      - name: Install release dependencies for SBOM
+        run: |
+          set -euo pipefail
           npm ci --prefix release-root/package --omit=dev --ignore-scripts --no-audit --no-fund
           # Syft v1.46.0 recognizes npm's package-lock filename but not its
           # publishable, byte-equivalent npm-shrinkwrap filename. The alias is

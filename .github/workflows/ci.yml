@@ -18,6 +18,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install Gitleaks
+        run: bash .github/scripts/install-gitleaks.sh
+
+      - name: Scan the current source tree for secrets
+        run: gitleaks dir . --redact=100 --no-banner --no-color
+
       - name: Install Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
@@ -34,4 +40,9 @@ jobs:
         run: npm test
 
       - name: Verify public package boundary
-        run: npm pack --dry-run --json --ignore-scripts >/dev/null
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm pack --dry-run --json --ignore-scripts > /tmp/package-report.json
+          jq -r '.[0].files[].path' /tmp/package-report.json | LC_ALL=C sort > /tmp/package-files.actual
+          diff --unified=3 -- .github/package-files.allowlist.txt /tmp/package-files.actual

@@ -24,7 +24,6 @@
     "fixtures",
     "runbooks",
     "scripts/verify-dist.cjs",
-    "scripts/smoke.mjs",
     "asset_registry.example.json",
     "bridge_routes.example.json",
     "clusters.example.json",
