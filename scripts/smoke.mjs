@@ -437,10 +437,19 @@ try {
 // ---------------------------------------------------------------------------
 // NOWPayments IPN signature verification
 // ---------------------------------------------------------------------------
-await nowpayments.configureNowpayments({ environment: "sandbox", apiKey: "smoke-key-1234567890", ipnSecret: "smoke-ipn-secret-12345" });
+const nowpaymentsApiKeyFixture = crypto.randomBytes(24).toString("hex");
+const nowpaymentsIpnSecretFixture = crypto.randomBytes(32).toString("hex");
+await nowpayments.configureNowpayments({
+  environment: "sandbox",
+  apiKey: nowpaymentsApiKeyFixture,
+  ipnSecret: nowpaymentsIpnSecretFixture,
+});
 const ipnBody = { actually_paid: 5, pay_amount: 5, pay_currency: "usdc", payment_id: 1, payment_status: "finished" };
 const canonical = nowpayments.canonicalizeForIpn(ipnBody);
-const goodSig = crypto.createHmac("sha512", "smoke-ipn-secret-12345").update(canonical).digest("hex");
+const goodSig = crypto
+  .createHmac("sha512", nowpaymentsIpnSecretFixture)
+  .update(canonical)
+  .digest("hex");
 const goodVerify = await nowpayments.verifyNowpaymentsIpn({ rawBody: JSON.stringify(ipnBody), sigHeader: goodSig });
 assert(goodVerify.valid === true, "valid NOWPayments IPN must pass HMAC verification");
 const badVerify = await nowpayments.verifyNowpaymentsIpn({ rawBody: JSON.stringify(ipnBody), sigHeader: "0".repeat(128) });

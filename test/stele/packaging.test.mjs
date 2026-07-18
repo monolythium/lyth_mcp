@@ -44,7 +44,7 @@ test("local and internal material is ignored at both root and nested paths", asy
   }
 });
 
-test("npm packing includes the Stele runtime but no source, tests, or private/internal paths", async () => {
+test("npm packing exactly matches the reviewed public package allowlist", async () => {
   const output = execFileSync(
     "npm",
     ["pack", "--dry-run", "--json", "--ignore-scripts"],
@@ -52,6 +52,15 @@ test("npm packing includes the Stele runtime but no source, tests, or private/in
   );
   const report = JSON.parse(output)[0];
   const paths = report.files.map((entry) => entry.path);
+  const expectedPaths = (await readFile(
+    resolve(root, ".github/package-files.allowlist.txt"),
+    "utf8",
+  ))
+    .trim()
+    .split("\n");
+
+  assert.deepEqual([...paths].sort(), expectedPaths);
+  assert.equal(paths.includes("scripts/smoke.mjs"), false);
 
   for (const required of [
     "npm-shrinkwrap.json",
