@@ -4,9 +4,12 @@ import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 
-import { dedicatedAgentWalletStatus } from "../../dist/stele/agent-keystore.js";
+import {
+  configuredLockedAgentWalletStatus,
+  notConfiguredAgentWalletStatus,
+} from "../../dist/stele/agent-keystore.js";
 import { redactSteleText, redactSteleValue } from "../../dist/stele/privacy.js";
 import {
   STELE_TOOL_NAMES,
@@ -39,9 +42,12 @@ const mismatch = {
   expected: identity,
 };
 
-function dependencies({ identityResult = verified, searchServices } = {}) {
+function dependencies({ identityResult = verified, searchServices, walletStatus } = {}) {
   return {
     identity: { async verify() { return identityResult; } },
+    walletStatus: walletStatus ?? {
+      async readStatus() { return notConfiguredAgentWalletStatus(); },
+    },
     api: {
       async getMeta() { throw new Error("not used"); },
       async searchServices(input) {
@@ -195,24 +201,72 @@ test("strict tool input and output schemas prevent secret smuggling", async () =
   assert.equal(JSON.stringify(unsafeOutput).includes(secretFromApi), false);
 });
 
-test("dedicated wallet status is static, separate, and contains no key lifecycle or address", async () => {
+test("dedicated wallet status reads only injected public lifecycle state", async () => {
   let identityCalls = 0;
   let apiCalls = 0;
+  let statusCalls = 0;
+  const expected = configuredLockedAgentWalletStatus(
+    "mono1dytvzzug96qtr0k09em5qm95hqn83cdyag8k3u",
+    1,
+  );
   const result = await runSteleTool("stele_agent_wallet_status", {}, {
     identity: { async verify() { identityCalls += 1; return verified; } },
+    walletStatus: {
+      async readStatus() {
+        statusCalls += 1;
+        return expected;
+      },
+    },
     api: {
       async getMeta() { apiCalls += 1; throw new Error("forbidden"); },
       async searchServices() { apiCalls += 1; throw new Error("forbidden"); },
     },
   });
   assert.equal(result.isError, false);
-  assert.deepEqual(result.output.wallet, dedicatedAgentWalletStatus());
-  assert.equal(result.output.wallet.state, "not_configured");
-  assert.equal(result.output.wallet.address, null);
-  assert.equal(result.output.wallet.keyStorage, "os_credential_store_required");
+  assert.deepEqual(result.output.wallet, expected);
+  assert.equal(result.output.wallet.state, "configured_locked");
+  assert.equal(result.output.wallet.address, expected.address);
+  assert.equal(result.output.wallet.keyStorage, "os_credential_store");
   assert.equal(result.output.wallet.import, "forbidden");
   assert.equal(result.output.wallet.export, "forbidden");
-  assert.deepEqual({ identityCalls, apiCalls }, { identityCalls: 0, apiCalls: 0 });
+  assert.deepEqual({ identityCalls, apiCalls, statusCalls }, { identityCalls: 0, apiCalls: 0, statusCalls: 1 });
+});
+
+test("wallet lifecycle failures collapse to one safe unavailable response", async () => {
+  const sentinel = "native-keyring-secret-error";
+  const result = await runSteleTool(
+    "stele_agent_wallet_status",
+    {},
+    dependencies({
+      walletStatus: {
+        async readStatus() { throw new Error(sentinel); },
+      },
+    }),
+  );
+  assert.deepEqual(result, { isError: true, output: { code: "stele_unavailable" } });
+  assert.equal(JSON.stringify(result).includes(sentinel), false);
+});
+
+test("wallet status rejects extra secret fields and malformed public identity", async () => {
+  const sentinel = "SENTINEL_PRIVATE_SEED";
+  const canonical = configuredLockedAgentWalletStatus(
+    "mono1dytvzzug96qtr0k09em5qm95hqn83cdyag8k3u",
+    1,
+  );
+  for (const unsafe of [
+    { ...canonical, seed: sentinel },
+    { ...canonical, address: "mono1notcanonical" },
+    { ...canonical, generation: 0 },
+    { ...canonical, execution: { ...canonical.execution, submission: "enabled" } },
+  ]) {
+    const result = await runSteleTool(
+      "stele_agent_wallet_status",
+      {},
+      dependencies({ walletStatus: { async readStatus() { return unsafe; } } }),
+    );
+    assert.deepEqual(result, { isError: true, output: { code: "stele_unavailable" } });
+    assert.equal(JSON.stringify(result).includes(sentinel), false);
+  }
 });
 
 test("diagnostic redaction removes credential fields, URL credentials, auth values, and query secrets", () => {
@@ -231,11 +285,43 @@ test("diagnostic redaction removes credential fields, URL credentials, auth valu
 });
 
 test("the standalone server module graph does not import the legacy wallet or submission modules", async () => {
-  const source = await readFile(new URL("../../dist/stele/server.js", import.meta.url), "utf8");
+  const entry = resolve(new URL("../../dist/stele/server.js", import.meta.url).pathname);
+  const source = await readFile(entry, "utf8");
   const imports = [...source.matchAll(/from\s+["']([^"']+)["']/gu)].map((match) => match[1]);
   assert.equal(imports.some((specifier) => /(?:^|\/)wallet\.js$/u.test(specifier)), false);
   assert.equal(imports.some((specifier) => /(?:submission|outbox|connectors)/u.test(specifier)), false);
   for (const forbiddenTool of ["wallet_import", "wallet_export", "wallet_sign", "tx_submit"]) {
     assert.equal(source.includes(forbiddenTool), false);
   }
+
+  const graph = await localModuleGraph(entry);
+  for (const forbiddenModule of [
+    "agent-wallet-admin.js",
+    "os-credential-store.js",
+    "wallet-cli.js",
+    "wallet.js",
+    "outbox.js",
+    "connectors.js",
+  ]) {
+    assert.equal(
+      [...graph].some((path) => path.endsWith(`/${forbiddenModule}`)),
+      false,
+      `Stele MCP graph reaches ${forbiddenModule}`,
+    );
+  }
 });
+
+async function localModuleGraph(entry) {
+  const visited = new Set();
+  const pending = [entry];
+  while (pending.length > 0) {
+    const file = pending.pop();
+    if (visited.has(file)) continue;
+    visited.add(file);
+    const source = await readFile(file, "utf8");
+    for (const match of source.matchAll(/(?:from\s+|import\s*\()["']([^"']+)["']/gu)) {
+      if (match[1].startsWith(".")) pending.push(resolve(dirname(file), match[1]));
+    }
+  }
+  return visited;
+}

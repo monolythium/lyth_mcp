@@ -74,6 +74,16 @@ jobs:
       - name: Run full test suite
         run: npm test
 
+      - name: Exercise production Linux Secret Service adapter
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes dbus-x11 gnome-keyring libsecret-1-0
+          dbus-run-session -- bash -euo pipefail -c '
+            eval "$(printf %s temporary-release-keyring | gnome-keyring-daemon --unlock)"
+            node .github/scripts/native-keyring-smoke.mjs
+          '
+
       - name: Build deterministic package twice
         shell: bash
         env:
@@ -144,8 +154,10 @@ jobs:
           jq -e --arg version "$VERSION" '
             (.spdxVersion | startswith("SPDX-")) and
             ([.packages[] | select(.name == "lyth-mcp" and .versionInfo == $version)] | length == 1) and
+            ([.packages[] | select(.name == "@github/keytar" and .versionInfo == "7.10.6")] | length == 1) and
             ([.packages[] | select(.name == "@modelcontextprotocol/sdk" and .versionInfo == "1.29.0")] | length >= 1) and
             ([.packages[] | select(.name == "@monolythium/core-sdk" and .versionInfo == "0.6.8")] | length == 1) and
+            ([.packages[] | select(.name == "node-addon-api" and .versionInfo == "8.9.0")] | length == 1) and
             ([.packages[] | select(.name == "zod" and .versionInfo == "3.25.76")] | length >= 1) and
             ([.packages[] | select(any(.externalRefs[]?;
               .referenceType == "purl" and (.referenceLocator | startswith("pkg:npm/"))

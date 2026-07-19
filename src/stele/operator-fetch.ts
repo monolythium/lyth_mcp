@@ -96,7 +96,7 @@ export class SteleOperatorFetchBoundary {
             accept: "application/json",
             "accept-encoding": "identity",
             "content-type": "application/json",
-            "user-agent": "lyth-stele-mcp/0.1.0",
+            "user-agent": "lyth-stele-mcp/0.2.0",
           },
           body: init!.body,
           cache: "no-store",
