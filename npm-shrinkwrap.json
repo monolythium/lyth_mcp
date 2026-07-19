@@ -1,12 +1,12 @@
 {
   "name": "lyth-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "lyth-mcp",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "license": "MIT",
       "dependencies": {
         "@github/keytar": "7.10.6",
@@ -17,6 +17,7 @@
       "bin": {
         "lyth-dev-mcp": "dist/dev_index.js",
         "lyth-mcp": "dist/index.js",
+        "lyth-stele-auth": "dist/stele_oauth_index.js",
         "lyth-stele-mcp": "dist/stele_index.js",
         "lyth-stele-wallet": "dist/stele_wallet_index.js"
       },
@@ -26,7 +27,7 @@
         "typescript": "5.9.3"
       },
       "engines": {
-        "node": ">=22.0.0"
+        "node": ">=22.22.0"
       }
     },
     "node_modules/@esbuild/aix-ppc64": {

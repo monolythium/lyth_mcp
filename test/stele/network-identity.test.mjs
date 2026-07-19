@@ -20,6 +20,7 @@ function metadata(overrides = {}) {
     genesisHash: expected.genesisHash,
     walletAuthEnabled: true,
     oauthEnabled: true,
+    providerDraftsEnabled: true,
     economicWritesEnabled: false,
     hostedSigningEnabled: false,
     ...overrides,
@@ -54,6 +55,7 @@ test("the SDK, trusted operator, and Stele metadata must all match", async () =>
   assert.equal(result.ok, true);
   assert.deepEqual(result.identity, expected);
   assert.deepEqual(result.operator, { verified: true });
+  assert.equal(result.meta.providerDraftsEnabled, true);
 });
 
 test("each SDK/operator/meta identity mismatch fails closed", async (t) => {
@@ -80,6 +82,21 @@ test("each SDK/operator/meta identity mismatch fails closed", async (t) => {
     [
       "metadata missing genesis",
       { meta: Object.fromEntries(Object.entries(metadata()).filter(([key]) => key !== "genesisHash")) },
+      "meta_identity_invalid",
+    ],
+    [
+      "metadata missing provider drafts flag",
+      { meta: Object.fromEntries(Object.entries(metadata()).filter(([key]) => key !== "providerDraftsEnabled")) },
+      "meta_identity_invalid",
+    ],
+    [
+      "metadata malformed provider drafts flag",
+      { meta: metadata({ providerDraftsEnabled: "true" }) },
+      "meta_identity_invalid",
+    ],
+    [
+      "metadata unknown security flag",
+      { meta: metadata({ providerDraftSigningEnabled: true }) },
       "meta_identity_invalid",
     ],
     ["metadata unavailable", { meta: new Error("token=super-secret") }, "meta_unavailable"],

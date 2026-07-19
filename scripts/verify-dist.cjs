@@ -4,6 +4,23 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
+const requiredNodeEngine = ">=22.22.0";
+const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const shrinkwrap = JSON.parse(fs.readFileSync(path.join(root, "npm-shrinkwrap.json"), "utf8"));
+const nodeVersion = process.versions.node.split(".").map(Number);
+
+if (
+  packageJson.engines?.node !== requiredNodeEngine ||
+  shrinkwrap.packages?.[""]?.engines?.node !== requiredNodeEngine ||
+  nodeVersion.length !== 3 ||
+  nodeVersion.some((part) => !Number.isSafeInteger(part) || part < 0) ||
+  nodeVersion[0] < 22 ||
+  (nodeVersion[0] === 22 && nodeVersion[1] < 22)
+) {
+  console.error(`lyth-mcp requires Node.js ${requiredNodeEngine}.`);
+  process.exit(1);
+}
+
 const requiredFiles = [
   "dist/addressbook.js",
   "dist/addressbook.d.ts",
@@ -11,6 +28,8 @@ const requiredFiles = [
   "dist/index.d.ts",
   "dist/stele_index.js",
   "dist/stele_index.d.ts",
+  "dist/stele_oauth_index.js",
+  "dist/stele_oauth_index.d.ts",
   "dist/stele_wallet_index.js",
   "dist/stele_wallet_index.d.ts",
   "dist/stele/agent-keystore.js",
@@ -27,6 +46,26 @@ const requiredFiles = [
   "dist/stele/operator-fetch.d.ts",
   "dist/stele/os-credential-store.js",
   "dist/stele/os-credential-store.d.ts",
+  "dist/stele/oauth-admin.js",
+  "dist/stele/oauth-admin.d.ts",
+  "dist/stele/oauth-browser.js",
+  "dist/stele/oauth-browser.d.ts",
+  "dist/stele/oauth-cli.js",
+  "dist/stele/oauth-cli.d.ts",
+  "dist/stele/oauth-contract.js",
+  "dist/stele/oauth-contract.d.ts",
+  "dist/stele/oauth-credential-store.js",
+  "dist/stele/oauth-credential-store.d.ts",
+  "dist/stele/oauth-http.js",
+  "dist/stele/oauth-http.d.ts",
+  "dist/stele/oauth-loopback.js",
+  "dist/stele/oauth-loopback.d.ts",
+  "dist/stele/oauth-refresh-lock.js",
+  "dist/stele/oauth-refresh-lock.d.ts",
+  "dist/stele/oauth-runtime-http.js",
+  "dist/stele/oauth-runtime-http.d.ts",
+  "dist/stele/oauth-session-broker.js",
+  "dist/stele/oauth-session-broker.d.ts",
   "dist/stele/privacy.js",
   "dist/stele/privacy.d.ts",
   "dist/stele/server.js",

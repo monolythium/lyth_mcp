@@ -70,17 +70,17 @@ The MCP is allowed to help. The user controls funding, policy, passphrases, and 
 
 ## Install
 
-Install the reviewed `v0.2.0` release artifact from GitHub:
+Install the reviewed `v0.3.0` release artifact from GitHub:
 
 ```bash
-npm install --global https://github.com/monolythium/lyth_mcp/releases/download/v0.2.0/lyth-mcp-0.2.0.tgz
+npm install --global https://github.com/monolythium/lyth_mcp/releases/download/v0.3.0/lyth-mcp-0.3.0.tgz
 ```
 
 For source development, clone the exact tag instead of installing a mutable
 default branch:
 
 ```bash
-git clone --branch v0.2.0 --depth 1 https://github.com/monolythium/lyth_mcp.git
+git clone --branch v0.3.0 --depth 1 https://github.com/monolythium/lyth_mcp.git
 ```
 
 From this repository:
@@ -136,6 +136,26 @@ The profile exposes exactly three read-only tools:
 | `stele_agent_wallet_status` | Read public lifecycle metadata for the dedicated agent wallet without opening its seed |
 
 Economic execution is intentionally unavailable in this foundation slice. The Stele entry point cannot create, import, reveal, unlock, sign, or submit, and it never inspects desktop, browser, or legacy MCP wallet stores. A `configured_locked` response means that a public lifecycle commit exists; it does not unlock or prove live access to the private seed.
+
+### Hosted MCP authorization foundation
+
+Authorize the local client for public hosted-MCP reads with the separate administrator:
+
+```bash
+lyth-stele-auth login
+lyth-stele-auth status
+lyth-stele-auth logout
+```
+
+`login` and `logout` require stdin, stdout, and stderr to be attached to a real terminal. Login binds an ephemeral listener to literal `127.0.0.1` before registering a short-lived native public client, uses Authorization Code with S256 PKCE, and opens the consent page without printing or persisting its URL. A registration is accepted only when its issue time is within 60 seconds of the local clock, its expiry is still strictly in the future, and its lifetime is no more than 31,536,000 seconds. The Browser Wallet remains the human login and consent surface. This client is pinned to issuer `https://stele.monolythium.com`, resource `https://stele.monolythium.com/mcp`, and the single `stele:public:read` scope; origins, resources, and scopes cannot be overridden through environment variables or command-line arguments.
+
+The registration, access token, and rotating refresh token are kept together under service `com.monolythium.stele.oauth-session` and account `hosted-mcp-v1:production` in the native OS credential store. That account is separate from the dedicated agent seed service. No token, client ID, callback, PKCE value, or authorization code is written to a plaintext state file, accepted through the environment or CLI, or included in status output. `logout` revokes the refresh-token family before deleting the native credential and preserves local state when revocation cannot be confirmed.
+
+The runtime session broker can return a current bearer token to a future authenticated Stele transport and serializes refresh-token rotation across local processes. It cannot launch a browser, dynamically register a client, recover `invalid_client`, access seed custody or SDK crypto, sign, submit, or broadcast. This `v0.3.0` slice intentionally adds no MCP tools and does not yet connect the three-tool local profile to private hosted-MCP draft reads. `reauth_required` means an expired or invalid local grant needs another interactive `login`; it does not expose client or token metadata.
+
+Cross-process rotation uses a kernel-owned listener bound exclusively to literal `127.0.0.1` on the pinned private-range port `49371`; it accepts no data and immediately destroys connections. The listener is held before any credential read and through the complete refresh/write operation, and the kernel releases it if the process dies. An unrelated local process already using that port makes authentication fail closed as busy. Because the port is host-wide, another local user can delay authentication by occupying it; this is an availability-only boundary and grants no credential or wallet access.
+
+Refresh-token rotation has one unavoidable crash boundary: the authorization service may issue a replacement immediately before the process can commit it to the native credential store. If the process or host stops in that interval, the older local grant may no longer refresh and the replacement cannot be reconstructed. The next use fails closed and requires `lyth-stele-auth login` again. On a normal persistence failure, the client first attempts to revoke the replacement family. If that revocation also fails, it attempts to retain the valid replacement as `reauth_required` so a later `logout` can retry revocation. If the native credential store refuses both the original commit and that compensating retention, the untracked server-side family can only be bounded by expiry or server-side revocation. A replacement lost to a hard crash has the same residual risk because `logout` never possessed it. No recovery value is written to logs or plaintext storage.
 
 ### Dedicated local agent wallet
 

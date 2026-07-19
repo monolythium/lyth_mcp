@@ -18,10 +18,21 @@ const steleRuntimeModules = [
   "dist/stele/network-identity.js",
   "dist/stele/operator-fetch.js",
   "dist/stele/os-credential-store.js",
+  "dist/stele/oauth-admin.js",
+  "dist/stele/oauth-browser.js",
+  "dist/stele/oauth-cli.js",
+  "dist/stele/oauth-contract.js",
+  "dist/stele/oauth-credential-store.js",
+  "dist/stele/oauth-http.js",
+  "dist/stele/oauth-loopback.js",
+  "dist/stele/oauth-refresh-lock.js",
+  "dist/stele/oauth-runtime-http.js",
+  "dist/stele/oauth-session-broker.js",
   "dist/stele/privacy.js",
   "dist/stele/server.js",
   "dist/stele/wallet-cli.js",
   "dist/stele/wallet-state.js",
+  "dist/stele_oauth_index.js",
 ];
 
 test("the public package exact-pins the reviewed SDK release", async () => {
@@ -33,8 +44,27 @@ test("the public package exact-pins the reviewed SDK release", async () => {
   assert.equal(lock.packages[""].dependencies["@github/keytar"], "7.10.6");
   assert.equal(lock.packages["node_modules/@monolythium/core-sdk"].version, "0.6.8");
   assert.equal(lock.packages["node_modules/@github/keytar"].version, "7.10.6");
+  assert.equal(packageJson.version, "0.3.0");
+  assert.equal(lock.version, "0.3.0");
+  assert.equal(lock.packages[""].version, "0.3.0");
+  assert.equal(packageJson.engines.node, ">=22.22.0");
+  assert.equal(lock.packages[""].engines.node, ">=22.22.0");
   assert.equal(packageJson.bin["lyth-stele-mcp"], "dist/stele_index.js");
+  assert.equal(packageJson.bin["lyth-stele-auth"], "dist/stele_oauth_index.js");
   assert.equal(packageJson.bin["lyth-stele-wallet"], "dist/stele_wallet_index.js");
+});
+
+test("public OAuth guidance states registration and compensation boundaries", async () => {
+  const readme = await readFile(resolve(root, "README.md"), "utf8");
+  for (const required of [
+    "issue time is within 60 seconds",
+    "expiry is still strictly in the future",
+    "lifetime is no more than 31,536,000 seconds",
+    "retain the valid replacement as `reauth_required`",
+    "refuses both the original commit and that compensating retention",
+  ]) {
+    assert.equal(readme.includes(required), true, `README is missing ${required}`);
+  }
 });
 
 test("local and internal material is ignored at both root and nested paths", async () => {
@@ -50,6 +80,41 @@ test("local and internal material is ignored at both root and nested paths", asy
     "*_INTERNAL.md",
   ]) {
     assert.equal(ignore.split("\n").includes(rule), true, `missing ignore rule ${rule}`);
+  }
+});
+
+test("cross-platform native smoke covers the isolated OAuth record lifecycle", async () => {
+  const smoke = await readFile(resolve(root, ".github/scripts/native-keyring-smoke.mjs"), "utf8");
+  const ci = await readFile(resolve(root, ".github/workflows/ci.yml"), "utf8");
+  for (const required of [
+    "NativeSteleOAuthCredentialStore",
+    "createSteleOAuthCredentialRecord",
+    "rotateSteleOAuthCredentialRecord",
+    "com.monolythium.stele.oauth-session",
+    "hosted-mcp-v1:production",
+    "oauth.write(first)",
+    "oauth.write(replacement)",
+    "oauth.delete()",
+    "oauthPhysicalAccount",
+    "oauthKeytar",
+    "logicalService === oauthService && logicalAccount === oauthAccount",
+    "keytar.deletePassword(oauthService, oauthPhysicalAccount)",
+  ]) {
+    assert.equal(smoke.includes(required), true, `native smoke is missing ${required}`);
+  }
+  assert.doesNotMatch(
+    smoke,
+    /keytar\.(?:getPassword|setPassword|deletePassword)\(oauthService,\s*oauthAccount\s*[,)]/u,
+  );
+  assert.equal(smoke.includes("console.log"), false);
+  for (const required of [
+    "ubuntu-24.04",
+    "macos-14",
+    "windows-2022",
+    "test/stele/oauth-session.test.mjs",
+    "node .github/scripts/native-keyring-smoke.mjs",
+  ]) {
+    assert.equal(ci.includes(required), true, `native matrix is missing ${required}`);
   }
 });
 
@@ -110,7 +175,7 @@ test("the installed package has a deterministic closure and only three Stele too
     "@github/keytar@7.10.6",
     "@modelcontextprotocol/sdk@1.29.0",
     "@monolythium/core-sdk@0.6.8",
-    "lyth-mcp@0.2.0",
+    "lyth-mcp@0.3.0",
     "node-addon-api@8.9.0",
     "zod@3.25.76",
   ]) {
@@ -136,6 +201,13 @@ test("the installed package has a deterministic closure and only three Stele too
   );
   assert.match(walletHelp, /lyth-stele-wallet <create\|repair>/u);
   assert.match(walletHelp, /Signing and submission are disabled/u);
+  const oauthHelp = execFileSync(
+    process.execPath,
+    [resolve(packedRoot, "dist/stele_oauth_index.js"), "--help"],
+    { cwd: packedRoot, encoding: "utf8" },
+  );
+  assert.match(oauthHelp, /lyth-stele-auth <login\|status\|logout>/u);
+  assert.match(oauthHelp, /Tokens are never accepted on the command line/u);
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [resolve(packedRoot, "dist/stele_index.js")],

@@ -39,6 +39,7 @@ export const SteleMetaSchema = z
     genesisHash: z.string().regex(HASH_32),
     walletAuthEnabled: z.boolean(),
     oauthEnabled: z.boolean(),
+    providerDraftsEnabled: z.boolean(),
     economicWritesEnabled: z.boolean(),
     hostedSigningEnabled: z.literal(false),
   })
@@ -258,7 +259,7 @@ export class SteleApiClient implements SteleApiReader {
           headers: {
             accept: "application/json",
             "accept-encoding": "identity",
-            "user-agent": "lyth-stele-mcp/0.2.0",
+            "user-agent": "lyth-stele-mcp/0.3.0",
           },
           cache: "no-store",
           credentials: "omit",
