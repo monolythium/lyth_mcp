@@ -7,6 +7,7 @@ import { createConnection, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   SteleOAuthAdmin,
@@ -1213,7 +1214,7 @@ test("runtime OAuth graph is recursively isolated from admin, custody, crypto, s
     Object.getOwnPropertyNames(SteleOAuthRuntimeHttpClient.prototype).sort(),
     ["constructor", "refresh", "revoke"],
   );
-  const entry = resolve(new URL("../../dist/stele/oauth-session-broker.js", import.meta.url).pathname);
+  const entry = fileURLToPath(new URL("../../dist/stele/oauth-session-broker.js", import.meta.url));
   const graph = await localModuleGraph(entry);
   for (const forbidden of [
     "oauth-http.js",
@@ -1236,7 +1237,7 @@ test("runtime OAuth graph is recursively isolated from admin, custody, crypto, s
     assert.equal(/(?:sign|submit|broadcast)(?:Transaction|Payload)?\s*\(/iu.test(source), false, `${path} exposes execution`);
   }
   const runtimeTransport = await readFile(
-    resolve(new URL("../../dist/stele/oauth-runtime-http.js", import.meta.url).pathname),
+    fileURLToPath(new URL("../../dist/stele/oauth-runtime-http.js", import.meta.url)),
     "utf8",
   );
   for (const forbiddenCapability of [
