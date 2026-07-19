@@ -45,6 +45,7 @@ function metadata(overrides = {}) {
     genesisHash: GENESIS,
     walletAuthEnabled: true,
     oauthEnabled: true,
+    providerDraftsEnabled: true,
     economicWritesEnabled: false,
     hostedSigningEnabled: false,
     ...overrides,
@@ -160,6 +161,26 @@ test("metadata reads use a bounded, credential-free, no-redirect request", async
   assert.equal(new Headers(observed.init.headers).get("accept-encoding"), "identity");
   assert.equal(observed.init.headers.authorization, undefined);
   assert.equal(observed.init.headers.cookie, undefined);
+});
+
+test("public metadata requires the exact provider-drafts boolean and rejects unknown flags", async () => {
+  for (const providerDraftsEnabled of [true, false]) {
+    const client = new SteleApiClient({}, async () =>
+      jsonResponse(metadata({ providerDraftsEnabled })));
+    assert.equal((await client.getMeta()).providerDraftsEnabled, providerDraftsEnabled);
+  }
+
+  const { providerDraftsEnabled: _removed, ...missing } = metadata();
+  for (const unsafe of [
+    missing,
+    metadata({ providerDraftsEnabled: "true" }),
+    metadata({ providerDraftsEnabled: 1 }),
+    metadata({ providerDraftsEnabled: null }),
+    metadata({ providerDraftSigningEnabled: true }),
+  ]) {
+    const client = new SteleApiClient({}, async () => jsonResponse(unsafe));
+    await assert.rejects(() => client.getMeta(), SteleApiBoundaryError);
+  }
 });
 
 test("service search validates both input and the complete upstream response", async () => {

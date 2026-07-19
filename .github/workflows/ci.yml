@@ -70,10 +70,10 @@ jobs:
       - name: Install dependencies without lifecycle scripts
         run: npm ci --ignore-scripts --no-audit --no-fund
 
-      - name: Build and exercise wallet lifecycle boundaries
+      - name: Build and exercise wallet and OAuth process boundaries
         run: |
           npm run build
-          node --test --test-concurrency=1 test/stele/agent-wallet.test.mjs
+          node --test --test-concurrency=1 test/stele/agent-wallet.test.mjs test/stele/oauth-session.test.mjs
 
       - name: Install Linux Secret Service runtime
         if: runner.os == 'Linux'

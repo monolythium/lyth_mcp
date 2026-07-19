@@ -31,6 +31,7 @@ const verified = {
     network: "testnet",
     walletAuthEnabled: true,
     oauthEnabled: true,
+    providerDraftsEnabled: true,
     economicWritesEnabled: false,
     hostedSigningEnabled: false,
   },
@@ -275,13 +276,30 @@ test("diagnostic redaction removes credential fields, URL credentials, auth valu
     nested: { mnemonic: "twelve secret words", safe: "public" },
     url: "https://alice:hunter2@example.com/path?token=abc123",
     authorization: "Bearer abc.def.ghi",
+    accessToken: "oauth-access-secret",
+    refresh_token: "oauth-refresh-secret",
+    clientId: "oauth-client-identifier",
+    callback: "http://127.0.0.1:1234/callback/private",
+    callbackUrl: "http://127.0.0.1:1234/callback/private-url",
+    code: "oauth-authorization-code",
+    state: "oauth-state-secret",
+    verifier: "oauth-verifier-short-key",
+    challenge: "oauth-challenge-secret",
+    codeVerifier: "oauth-verifier-secret",
   });
   const serialized = JSON.stringify(redacted);
-  for (const secret of ["top-secret", "twelve secret words", "alice", "hunter2", "abc123", "abc.def.ghi"]) {
+  for (const secret of ["top-secret", "twelve secret words", "alice", "hunter2", "abc123", "abc.def.ghi", "oauth-access-secret", "oauth-refresh-secret", "oauth-client-identifier", "callback/private", "private-url", "oauth-authorization-code", "oauth-state-secret", "oauth-verifier-short-key", "oauth-challenge-secret", "oauth-verifier-secret"]) {
     assert.equal(serialized.includes(secret), false);
   }
   assert.equal(serialized.includes("public"), true);
   assert.equal(redactSteleText("Bearer abc123"), "[REDACTED]");
+  const oauthUrl = redactSteleText("https://stele.monolythium.com/oauth/authorize?client_id=private&state=private-state&code_challenge=private-challenge");
+  assert.equal(oauthUrl.includes("private"), false);
+  const callbackId = "Z".repeat(43);
+  assert.equal(
+    redactSteleText(`callback http://127.0.0.1:39147/callback/${callbackId}?code=private path /callback/${callbackId}`).includes(callbackId),
+    false,
+  );
 });
 
 test("the standalone server module graph does not import the legacy wallet or submission modules", async () => {

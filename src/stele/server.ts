@@ -86,7 +86,7 @@ export function createSteleMcpServer(
   dependencies: SteleProfileDependencies = defaultSteleProfileDependencies(),
 ): McpServer {
   assertSteleToolAllowlist(steleToolDescriptors.map((descriptor) => descriptor.name));
-  const server = new McpServer({ name: "lyth-stele-mcp", version: "0.2.0" });
+  const server = new McpServer({ name: "lyth-stele-mcp", version: "0.3.0" });
 
   server.registerTool(
     "stele_connection_status",

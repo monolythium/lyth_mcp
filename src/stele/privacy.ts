@@ -1,7 +1,9 @@
-const SENSITIVE_KEY = /^(?:authorization|cookie|mnemonic|passphrase|password|private[_-]?key|recovery[_-]?phrase|seed|secret|signed[_-]?payload|token)$/iu;
-const SENSITIVE_QUERY = /([?&](?:access_token|api_key|key|password|secret|token)=)[^&#\s]*/giu;
+const SENSITIVE_KEY = /^(?:access[_-]?token|authorization|authorization[_-]?code|callback|callback[_-]?(?:uri|url)|challenge|client[_-]?id|code|code[_-]?challenge|code[_-]?verifier|cookie|mnemonic|oauth[_-]?state|passphrase|password|private[_-]?key|recovery[_-]?phrase|redirect[_-]?uri|refresh[_-]?token|seed|secret|signed[_-]?payload|state|token|verifier)$/iu;
+const SENSITIVE_QUERY = /([?&](?:access_token|api_key|authorization_code|client_id|code|code_challenge|code_verifier|key|password|redirect_uri|refresh_token|secret|state|token)=)[^&#\s]*/giu;
 const AUTHORIZATION_VALUE = /\b(?:basic|bearer)\s+[A-Za-z0-9._~+/=-]+/giu;
 const URL_CREDENTIALS = /\b(https?:\/\/)[^\s/@:]+:[^\s/@]+@/giu;
+const LOOPBACK_CALLBACK_URL = /\bhttp:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}\/callback\/[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])(?:[?#][^\s]*)?/giu;
+const CALLBACK_PATH_ID = /\/callback\/[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/gu;
 
 /**
  * Redact values before they cross a diagnostic or logging boundary.
@@ -10,6 +12,8 @@ const URL_CREDENTIALS = /\b(https?:\/\/)[^\s/@:]+:[^\s/@]+@/giu;
  */
 export function redactSteleText(value: string): string {
   return value
+    .replace(LOOPBACK_CALLBACK_URL, "[REDACTED:LOOPBACK_CALLBACK]")
+    .replace(CALLBACK_PATH_ID, "/callback/[REDACTED]")
     .replace(URL_CREDENTIALS, "$1[REDACTED]@")
     .replace(AUTHORIZATION_VALUE, "[REDACTED]")
     .replace(SENSITIVE_QUERY, "$1[REDACTED]");

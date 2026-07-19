@@ -1,6 +1,6 @@
 {
   "name": "lyth-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Monolythium MCP server for live-chain reads and AI runbooks.",
   "license": "MIT",
   "type": "module",
@@ -9,6 +9,7 @@
     "lyth-mcp": "dist/index.js",
     "lyth-dev-mcp": "dist/dev_index.js",
     "lyth-stele-mcp": "dist/stele_index.js",
+    "lyth-stele-auth": "dist/stele_oauth_index.js",
     "lyth-stele-wallet": "dist/stele_wallet_index.js"
   },
   "files": [
@@ -54,6 +55,6 @@
     "typescript": "5.9.3"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.22.0"
   }
 }

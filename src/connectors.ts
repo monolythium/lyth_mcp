@@ -237,7 +237,7 @@ export function redactConnector(connector: ConnectorRecord): ConnectorSummary {
 export async function buildConnectorHeaders(connector: ConnectorRecord, body: string): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
     "content-type": "application/json",
-    "user-agent": "lyth-mcp/0.2.0",
+    "user-agent": "lyth-mcp/0.3.0",
   };
   if (connector.auth.mode === "none") {
     return headers;
