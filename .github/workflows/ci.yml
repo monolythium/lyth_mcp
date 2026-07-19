@@ -46,3 +46,50 @@ jobs:
           npm pack --dry-run --json --ignore-scripts > /tmp/package-report.json
           jq -r '.[0].files[].path' /tmp/package-report.json | LC_ALL=C sort > /tmp/package-files.actual
           diff --unified=3 -- .github/package-files.allowlist.txt /tmp/package-files.actual
+
+  native-credential-store:
+    name: Native credential store (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.22.1
+          package-manager-cache: false
+
+      - name: Install dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Build and exercise wallet lifecycle boundaries
+        run: |
+          npm run build
+          node --test --test-concurrency=1 test/stele/agent-wallet.test.mjs
+
+      - name: Install Linux Secret Service runtime
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes dbus-x11 gnome-keyring libsecret-1-0
+
+      - name: Exercise Linux Secret Service
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          dbus-run-session -- bash -euo pipefail -c '
+            eval "$(printf %s temporary-ci-keyring | gnome-keyring-daemon --unlock)"
+            node .github/scripts/native-keyring-smoke.mjs
+          '
+
+      - name: Exercise native platform credential store
+        if: runner.os != 'Linux'
+        run: node .github/scripts/native-keyring-smoke.mjs

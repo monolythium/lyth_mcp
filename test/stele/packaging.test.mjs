@@ -10,22 +10,31 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 const root = resolve(new URL("../..", import.meta.url).pathname);
 const steleRuntimeModules = [
   "dist/stele_index.js",
+  "dist/stele_wallet_index.js",
   "dist/stele/agent-keystore.js",
+  "dist/stele/agent-wallet-admin.js",
   "dist/stele/api-client.js",
   "dist/stele/execution-gate.js",
   "dist/stele/network-identity.js",
   "dist/stele/operator-fetch.js",
+  "dist/stele/os-credential-store.js",
   "dist/stele/privacy.js",
   "dist/stele/server.js",
+  "dist/stele/wallet-cli.js",
+  "dist/stele/wallet-state.js",
 ];
 
 test("the public package exact-pins the reviewed SDK release", async () => {
   const packageJson = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
   const lock = JSON.parse(await readFile(resolve(root, "npm-shrinkwrap.json"), "utf8"));
   assert.equal(packageJson.dependencies["@monolythium/core-sdk"], "0.6.8");
+  assert.equal(packageJson.dependencies["@github/keytar"], "7.10.6");
   assert.equal(lock.packages[""].dependencies["@monolythium/core-sdk"], "0.6.8");
+  assert.equal(lock.packages[""].dependencies["@github/keytar"], "7.10.6");
   assert.equal(lock.packages["node_modules/@monolythium/core-sdk"].version, "0.6.8");
+  assert.equal(lock.packages["node_modules/@github/keytar"].version, "7.10.6");
   assert.equal(packageJson.bin["lyth-stele-mcp"], "dist/stele_index.js");
+  assert.equal(packageJson.bin["lyth-stele-wallet"], "dist/stele_wallet_index.js");
 });
 
 test("local and internal material is ignored at both root and nested paths", async () => {
@@ -98,9 +107,11 @@ test("the installed package has a deterministic closure and only three Stele too
   assert.deepEqual(installA.tree, installB.tree);
   assert.equal(installA.inventory.length >= 100, true);
   for (const expected of [
+    "@github/keytar@7.10.6",
     "@modelcontextprotocol/sdk@1.29.0",
     "@monolythium/core-sdk@0.6.8",
-    "lyth-mcp@0.1.0",
+    "lyth-mcp@0.2.0",
+    "node-addon-api@8.9.0",
     "zod@3.25.76",
   ]) {
     assert.equal(installA.inventory.includes(expected), true, `installed closure is missing ${expected}`);
@@ -118,6 +129,13 @@ test("the installed package has a deterministic closure and only three Stele too
   assert.deepEqual(packedShrinkwrap, sourceShrinkwrap);
 
   const packedRoot = resolve(installA.root, "node_modules/lyth-mcp");
+  const walletHelp = execFileSync(
+    process.execPath,
+    [resolve(packedRoot, "dist/stele_wallet_index.js"), "--help"],
+    { cwd: packedRoot, encoding: "utf8" },
+  );
+  assert.match(walletHelp, /lyth-stele-wallet <create\|repair>/u);
+  assert.match(walletHelp, /Signing and submission are disabled/u);
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [resolve(packedRoot, "dist/stele_index.js")],

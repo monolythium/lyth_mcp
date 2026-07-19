@@ -562,7 +562,7 @@ async function rpcCall<T>(endpoint: string, method: string, params: unknown[] = 
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "user-agent": "lyth-mcp/0.1.0",
+        "user-agent": "lyth-mcp/0.2.0",
       },
       body: JSON.stringify({
         jsonrpc: "2.0",
@@ -592,7 +592,7 @@ async function apiGet<T>(endpoint: string, path: string, query: Record<string, s
   }
   return withTimeout(async (signal) => {
     const res = await fetch(url, {
-      headers: { "user-agent": "lyth-mcp/0.1.0" },
+      headers: { "user-agent": "lyth-mcp/0.2.0" },
       signal,
     });
     const body = await res.json();
@@ -1794,7 +1794,7 @@ const policySchema = z.object({
 
 const server = new McpServer({
   name: "lyth-mcp",
-  version: "0.1.0",
+  version: "0.2.0",
 });
 
 const MCP_TOOL_NAMES = [
@@ -1955,7 +1955,7 @@ server.tool("mcp_self_check", "Check MCP install, config, stores, and RPC reacha
     checkedAt: new Date().toISOString(),
     package: {
       name: "lyth-mcp",
-      version: "0.1.0",
+      version: "0.2.0",
       root: PACKAGE_ROOT,
     },
     network: NETWORK,

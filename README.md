@@ -70,17 +70,17 @@ The MCP is allowed to help. The user controls funding, policy, passphrases, and 
 
 ## Install
 
-Install the reviewed `v0.1.0` release artifact from GitHub:
+Install the reviewed `v0.2.0` release artifact from GitHub:
 
 ```bash
-npm install --global https://github.com/monolythium/lyth_mcp/releases/download/v0.1.0/lyth-mcp-0.1.0.tgz
+npm install --global https://github.com/monolythium/lyth_mcp/releases/download/v0.2.0/lyth-mcp-0.2.0.tgz
 ```
 
 For source development, clone the exact tag instead of installing a mutable
 default branch:
 
 ```bash
-git clone --branch v0.1.0 --depth 1 https://github.com/monolythium/lyth_mcp.git
+git clone --branch v0.2.0 --depth 1 https://github.com/monolythium/lyth_mcp.git
 ```
 
 From this repository:
@@ -133,9 +133,31 @@ The profile exposes exactly three read-only tools:
 |---|---|
 | `stele_connection_status` | Re-read and compare the SDK pin, a genesis-verified trusted operator, and Stele metadata |
 | `stele_search_services` | Search public Stele listings after a fresh identity check |
-| `stele_agent_wallet_status` | Report the unavailable dedicated-agent keystore boundary without opening a key |
+| `stele_agent_wallet_status` | Read public lifecycle metadata for the dedicated agent wallet without opening its seed |
 
-Economic execution is intentionally unavailable in this foundation slice. The Stele entry point cannot import, reveal, unlock, sign, or submit, and it never inspects desktop, browser, or legacy MCP wallet stores.
+Economic execution is intentionally unavailable in this foundation slice. The Stele entry point cannot create, import, reveal, unlock, sign, or submit, and it never inspects desktop, browser, or legacy MCP wallet stores. A `configured_locked` response means that a public lifecycle commit exists; it does not unlock or prove live access to the private seed.
+
+### Dedicated local agent wallet
+
+The separately packaged administrator can create one dedicated Stele testnet wallet:
+
+```bash
+lyth-stele-wallet create
+```
+
+Creation requires stdin, stdout, and stderr to be attached to a real terminal plus an exact confirmation phrase. It generates a fresh 32-byte ML-DSA-65 seed, stores the network-bound seed under a random operation-scoped account only in the platform's native credential store, commits only the public address and lifecycle state to a non-secret local metadata file, and wipes mutable seed buffers on exit. Restrictive owner modes are enforced on POSIX systems where the filesystem exposes them. macOS uses Keychain, Windows uses Credential Manager, and Linux requires an available Secret Service session. There is no environment, plaintext-secret file, passphrase-file, kernel-keyring, CLI-helper, desktop-wallet, browser-wallet, or legacy-wallet fallback.
+
+This release intentionally provides no mnemonic, seed reveal, import, export, rotation, deletion, funding, signing, or transaction submission. Treat the wallet as nonrecoverable and testnet-only. Do not fund it while economic execution remains disabled. The current string-based native adapter is confined to this short-lived administrator; it is not approved as the eventual long-lived signer. Mutable JavaScript buffers are wiped best-effort, but immutable runtime/native string copies cannot be deterministically erased.
+
+If the process or machine stops between the provisioning and public-state commits, the lifecycle remains fail-closed. Use the same interactive administrator to reconcile it:
+
+```bash
+lyth-stele-wallet repair
+```
+
+Repair may clear a provisioning marker only when the native store confirms that no seed exists, or recover public locked status from the existing operation-scoped seed and address commitment. It never deletes, reveals, exports, signs with, or replaces a seed. If repair reports inconsistent state, stop; repeated repair attempts do not bypass the manual-recovery gate. The MCP server imports only the public-state reader; native seed custody is loaded dynamically after terminal and confirmation checks in the separate administrator process.
+
+Native OS stores primarily protect the seed at rest. They are not hardware-enclave isolation: malware, an administrator/root user, a debugger, or another process running with the same logged-in user/session may be able to request or inspect the credential. OS account or enterprise policy may also synchronize a platform credential between a user's devices; this slice does not claim hardware- or device-bound custody. The TTY prompt protects the packaged CLI workflow, not a hostile same-user process with arbitrary code or shell execution.
 
 Production reads are pinned to `https://stele.monolythium.com`. Local LAN testing is opt-in. Supply the same operator-controlled origin for both variables, replacing the documentation placeholder with a canonical dotted RFC1918 IPv4 address served over HTTP on effective port 80:
 

@@ -7,7 +7,10 @@ import {
   steleApiClientFromEnvironment,
   type SteleApiReader,
 } from "./api-client.js";
-import { dedicatedAgentWalletStatus } from "./agent-keystore.js";
+import {
+  dedicatedAgentWalletStatus,
+  type SteleWalletStatusReader,
+} from "./agent-keystore.js";
 import { steleExecutionGate } from "./execution-gate.js";
 import {
   SteleNetworkIdentityGuard,
@@ -15,6 +18,7 @@ import {
   type SteleNetworkIdentityResult,
 } from "./network-identity.js";
 import { safeSteleError } from "./privacy.js";
+import { FileSteleWalletStateStore } from "./wallet-state.js";
 
 export const STELE_TOOL_NAMES = [
   "stele_connection_status",
@@ -46,7 +50,7 @@ export const steleToolDescriptors: readonly SteleToolDescriptor[] = Object.freez
   }),
   Object.freeze({
     name: "stele_agent_wallet_status",
-    description: "Report the fail-closed dedicated Stele agent-wallet scaffold; no key is opened.",
+    description: "Report public locked status for the dedicated Stele agent wallet; no key is opened.",
     readOnly: true,
     economicExecution: "unavailable",
   }),
@@ -61,6 +65,7 @@ export interface SteleIdentityVerifier {
 export interface SteleProfileDependencies {
   readonly api: SteleApiReader;
   readonly identity: SteleIdentityVerifier;
+  readonly walletStatus: SteleWalletStatusReader;
 }
 
 export interface SteleToolRunResult {
@@ -70,14 +75,18 @@ export interface SteleToolRunResult {
 
 export function defaultSteleProfileDependencies(): SteleProfileDependencies {
   const api = steleApiClientFromEnvironment();
-  return { api, identity: new SteleNetworkIdentityGuard(api) };
+  return {
+    api,
+    identity: new SteleNetworkIdentityGuard(api),
+    walletStatus: new FileSteleWalletStateStore(),
+  };
 }
 
 export function createSteleMcpServer(
   dependencies: SteleProfileDependencies = defaultSteleProfileDependencies(),
 ): McpServer {
   assertSteleToolAllowlist(steleToolDescriptors.map((descriptor) => descriptor.name));
-  const server = new McpServer({ name: "lyth-stele-mcp", version: "0.1.0" });
+  const server = new McpServer({ name: "lyth-stele-mcp", version: "0.2.0" });
 
   server.registerTool(
     "stele_connection_status",
@@ -120,13 +129,17 @@ export async function runSteleTool(
 ): Promise<SteleToolRunResult> {
   if (name === "stele_agent_wallet_status") {
     if (!EmptyInputSchema.safeParse(input).success) return invalidRequest();
-    return {
-      isError: false,
-      output: {
-        profile: "lyth-stele-mcp",
-        wallet: dedicatedAgentWalletStatus(),
-      },
-    };
+    try {
+      return {
+        isError: false,
+        output: {
+          profile: "lyth-stele-mcp",
+          wallet: await dedicatedAgentWalletStatus(dependencies.walletStatus),
+        },
+      };
+    } catch {
+      return { isError: true, output: safeSteleError("stele_unavailable") };
+    }
   }
 
   if (name === "stele_connection_status") {

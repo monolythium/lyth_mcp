@@ -258,7 +258,7 @@ export class SteleApiClient implements SteleApiReader {
           headers: {
             accept: "application/json",
             "accept-encoding": "identity",
-            "user-agent": "lyth-stele-mcp/0.1.0",
+            "user-agent": "lyth-stele-mcp/0.2.0",
           },
           cache: "no-store",
           credentials: "omit",
